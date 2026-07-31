@@ -1,0 +1,35 @@
+[project]
+name = "engine"
+version = "0.1.0"
+description = "AI agent orchestration engine: orchestrator -> sub-agents -> multi-layer verification"
+requires-python = ">=3.11"
+dependencies = [
+  "anthropic>=0.40.0",
+  "python-dotenv>=1.0.1",
+  "pydantic>=2.9.0",
+  "ruff>=0.7.0",
+  "mypy>=1.13.0",
+]
+
+[project.scripts]
+engine = "engine.cli:main"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.0",
+  "pytest-mock>=3.14.0",
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
