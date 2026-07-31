@@ -6,6 +6,8 @@ from engine.state.models import VerificationResult
 
 TIMEOUT_SECONDS = 120
 
+_CATEGORY_BY_GATE = {"ruff": "CODE-QUALITY", "mypy": "CORRECTNESS", "pytest": "CORRECTNESS"}
+
 
 def _run(cmd: list[str], cwd: Path) -> tuple[bool, str]:
     try:
@@ -42,3 +44,20 @@ def run_automated_gates(workspace: Path) -> list[VerificationResult]:
         results.append(VerificationResult("pytest", True, "no test files present"))
 
     return results
+
+
+def automated_defects(results: list[VerificationResult]) -> list[dict]:
+    defects: list[dict] = []
+    for i, r in enumerate(results):
+        if r.passed:
+            continue
+        defects.append(
+            {
+                "id": f"AUTO{i}-{r.gate_name}",
+                "category": _CATEGORY_BY_GATE.get(r.gate_name, "CODE-QUALITY"),
+                "severity": "HIGH",
+                "location": r.gate_name,
+                "fix": r.detail[:2000],
+            }
+        )
+    return defects

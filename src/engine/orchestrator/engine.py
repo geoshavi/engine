@@ -7,7 +7,7 @@ from engine.orchestrator.subagent import generate_code, parse_files, write_files
 from engine.providers.base import Provider
 from engine.providers.registry import DEFAULT_MODELS
 from engine.state import db
-from engine.state.models import VerificationResult
+from engine.state.models import AttemptRecord
 from engine.verification.pipeline import build_retry_feedback, run_verification
 
 
@@ -18,7 +18,7 @@ class RunResult:
     workspace: Path
     passed: bool
     attempts: int
-    verification_history: list[list[VerificationResult]] = field(default_factory=list)
+    verification_history: list[AttemptRecord] = field(default_factory=list)
 
 
 def run_task(
@@ -31,7 +31,7 @@ def run_task(
         run_id = db.create_run(conn, task_text, provider_name, models["coder"])
 
         subtasks = plan_subtasks(task_text)
-        verification_history: list[list[VerificationResult]] = []
+        verification_history: list[AttemptRecord] = []
         passed = False
         feedback: str | None = None
 
@@ -41,13 +41,17 @@ def run_task(
                 files = parse_files(response_text)
                 write_files(workspace, files)
 
-            passed, results = run_verification(workspace, provider, models["judge"], task_text)
-            verification_history.append(results)
-            db.record_verification(conn, run_id, attempt, results)
+            status, merged, automated_results = run_verification(
+                workspace, provider, models["judge"], task_text
+            )
+            verification_history.append(AttemptRecord(status, automated_results, merged))
+            db.record_verification(conn, run_id, attempt, automated_results)
+            db.record_defects(conn, run_id, attempt, merged.get("defects", []))
 
+            passed = status == "OK"
             if passed:
                 break
-            feedback = build_retry_feedback(results)
+            feedback = build_retry_feedback(merged)
 
         db.finish_run(conn, run_id, "passed" if passed else "failed", len(verification_history))
 

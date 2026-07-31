@@ -1,10 +1,12 @@
+import json
 from pathlib import Path
 
 from engine.providers.base import GenerationResult, Message
 from engine.state.models import VerificationResult
-from engine.verification import pipeline
-from engine.verification.automated import run_automated_gates
-from engine.verification.judge import _parse_verdict, run_judge_gates
+from engine.verification import pipeline, verdict
+from engine.verification.automated import automated_defects, run_automated_gates
+from engine.verification.judge import _parse_critic, run_judge_gates
+from engine.verification.schema import enforce_critic_schema
 
 
 def test_automated_gates_pass_on_clean_code(tmp_path: Path) -> None:
@@ -23,17 +25,43 @@ def test_automated_gates_skip_when_no_python_files(tmp_path: Path) -> None:
     assert results[0].passed
 
 
-def test_parse_verdict() -> None:
-    assert _parse_verdict("VERDICT: PASS\nlooks good") is True
-    assert _parse_verdict("VERDICT: FAIL\nbug on line 3") is False
-    assert _parse_verdict("") is False
+def test_automated_defects_only_for_failed_gates() -> None:
+    results = [
+        VerificationResult("ruff", True, "ok"),
+        VerificationResult("mypy", False, "type error on line 4"),
+    ]
+    defects = automated_defects(results)
+    assert len(defects) == 1
+    assert defects[0]["category"] == "CORRECTNESS"
+    assert defects[0]["severity"] == "HIGH"
+    assert "type error on line 4" in defects[0]["fix"]
+
+
+def test_enforce_critic_schema_accepts_well_formed_critic() -> None:
+    critic = {"defects": [], "verdict": "OK"}
+    assert enforce_critic_schema(critic) == []
+
+
+def test_enforce_critic_schema_rejects_inconsistent_verdict() -> None:
+    critic = {
+        "defects": [
+            {"id": "C1", "category": "CORRECTNESS", "severity": "CRITICAL", "location": "x", "fix": "y"}
+        ],
+        "verdict": "OK",
+    }
+    errors = enforce_critic_schema(critic)
+    assert any("verdict" in e for e in errors)
+
+
+def test_enforce_critic_schema_rejects_non_dict() -> None:
+    assert enforce_critic_schema("not a dict") != []
 
 
 class _FakeProvider:
     name = "fake"
 
-    def __init__(self, verdict_text: str) -> None:
-        self._verdict_text = verdict_text
+    def __init__(self, response_text: str) -> None:
+        self._response_text = response_text
 
     def generate(
         self,
@@ -44,44 +72,120 @@ class _FakeProvider:
         temperature: float = 0.0,
     ) -> GenerationResult:
         return GenerationResult(
-            text=self._verdict_text, model=model, provider=self.name, input_tokens=1, output_tokens=1
+            text=self._response_text, model=model, provider=self.name, input_tokens=1, output_tokens=1
         )
 
 
-def test_run_judge_gates_returns_one_result_per_lens() -> None:
-    provider = _FakeProvider("VERDICT: PASS\nfine")
-    results = run_judge_gates(provider, "fake-model", "do the thing", "print('hi')")
-    assert len(results) == 3
-    assert all(r.passed for r in results)
-    assert {r.gate_name for r in results} == {"judge:correctness", "judge:security", "judge:style"}
+def _ok_critic_json() -> str:
+    return json.dumps({"defects": [], "verdict": "OK"})
 
 
-def test_pipeline_majority_vote_fails_overall_when_two_lenses_fail(monkeypatch, tmp_path: Path) -> None:
+def test_parse_critic_accepts_valid_json() -> None:
+    critic, errors = _parse_critic(_ok_critic_json())
+    assert errors == []
+    assert critic["verdict"] == "OK"
+
+
+def test_parse_critic_rejects_non_json_text() -> None:
+    critic, errors = _parse_critic("looks fine to me, no issues")
+    assert critic == {}
+    assert errors
+
+
+def test_run_judge_gates_returns_one_critic_per_lens() -> None:
+    provider = _FakeProvider(_ok_critic_json())
+    critics, schema_errors = run_judge_gates(provider, "fake-model", "do the thing", "print('hi')")
+    assert schema_errors == []
+    assert len(critics) == 3
+
+
+def test_verdict_merge_fails_when_any_blocking_defect_present() -> None:
+    critics = [
+        {"defects": [], "verdict": "OK"},
+        {
+            "defects": [
+                {"id": "S1", "category": "SECURITY", "severity": "CRITICAL", "location": "x", "fix": "y"}
+            ],
+            "verdict": "FAIL",
+        },
+    ]
+    merged = verdict.merge(critics, [])
+    assert merged["verdict"] == "FAIL"
+    assert len(merged["defects"]) == 1
+
+
+def test_verdict_gate_fails_closed_on_schema_errors() -> None:
+    merged = {"defects": [], "verdict": "OK"}
+    assert verdict.gate(merged, automated_passed=True, schema_errors=["bad json"]) == "UNVERIFIED"
+
+
+def test_verdict_gate_fails_when_automated_gates_failed() -> None:
+    merged = {"defects": [], "verdict": "OK"}
+    assert verdict.gate(merged, automated_passed=False, schema_errors=[]) == "UNVERIFIED"
+
+
+def test_verdict_gate_passes_when_everything_clean() -> None:
+    merged = {"defects": [], "verdict": "OK"}
+    assert verdict.gate(merged, automated_passed=True, schema_errors=[]) == "OK"
+
+
+def test_pipeline_run_verification_fails_when_judges_report_blocking_defects(
+    monkeypatch, tmp_path: Path
+) -> None:
     monkeypatch.setattr(
         pipeline, "run_automated_gates", lambda workspace: [VerificationResult("ruff", True, "ok")]
     )
+    monkeypatch.setattr(pipeline, "automated_defects", lambda results: [])
     monkeypatch.setattr(
         pipeline,
         "run_judge_gates",
-        lambda provider, model, task, code: [
-            VerificationResult("judge:correctness", False, "bug"),
-            VerificationResult("judge:security", False, "unsafe"),
-            VerificationResult("judge:style", True, "fine"),
-        ],
+        lambda provider, model, task, code: (
+            [
+                {"defects": [], "verdict": "OK"},
+                {
+                    "defects": [
+                        {
+                            "id": "C1",
+                            "category": "CORRECTNESS",
+                            "severity": "HIGH",
+                            "location": "solution.py:1",
+                            "fix": "fix the bug",
+                        }
+                    ],
+                    "verdict": "FAIL",
+                },
+                {"defects": [], "verdict": "OK"},
+            ],
+            [],
+        ),
     )
 
-    passed, results = pipeline.run_verification(tmp_path, _FakeProvider(""), "fake-model", "task")
+    status, merged, automated_results = pipeline.run_verification(
+        tmp_path, _FakeProvider(""), "fake-model", "task"
+    )
 
-    assert passed is False
-    assert len(results) == 4
+    assert status == "UNVERIFIED"
+    assert len(merged["defects"]) == 1
+    assert len(automated_results) == 1
 
 
-def test_build_retry_feedback_lists_only_failures() -> None:
-    results = [
-        VerificationResult("ruff", True, "ok"),
-        VerificationResult("mypy", False, "type error on line 4"),
-    ]
-    feedback = pipeline.build_retry_feedback(results)
-    assert "mypy" in feedback
-    assert "type error on line 4" in feedback
-    assert "ruff" not in feedback
+def test_build_retry_feedback_includes_defect_fix_text() -> None:
+    merged = {
+        "defects": [
+            {
+                "id": "C1",
+                "category": "CORRECTNESS",
+                "severity": "HIGH",
+                "location": "solution.py:3",
+                "fix": "handle the empty-string case",
+            }
+        ],
+        "verdict": "FAIL",
+    }
+    feedback = pipeline.build_retry_feedback(merged)
+    assert "handle the empty-string case" in feedback
+    assert "solution.py:3" in feedback
+
+
+def test_build_retry_feedback_empty_when_no_defects() -> None:
+    assert pipeline.build_retry_feedback({"defects": [], "verdict": "OK"}) == ""

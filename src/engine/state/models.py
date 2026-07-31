@@ -18,3 +18,10 @@ class VerificationResult:
     gate_name: str
     passed: bool
     detail: str
+
+
+@dataclass
+class AttemptRecord:
+    status: str  # "OK" | "UNVERIFIED" -- decided by verdict.gate, never by an LLM
+    automated_results: list[VerificationResult]
+    merged_critic: dict

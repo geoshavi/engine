@@ -11,6 +11,19 @@ loop, automated gates (ruff/mypy/pytest) + 3-lens LLM-judge review, SQLite run
 history. Multi-provider routing, parallel sub-agents, and experiment-based
 model selection are stubbed out for later milestones (see `routing/`).
 
+### Verification architecture
+
+No LLM ever decides pass/fail directly. Each judge lens (`verification/judge.py`)
+must return structured defects (`{id, category, severity, location, fix}`) as
+JSON, validated against a fixed schema (`verification/schema.py`). A pure,
+model-free Python function — `verification/verdict.py`'s `merge`/`gate` — is
+the only code path allowed to turn automated gate results + those defects into
+an `OK`/`UNVERIFIED` verdict: any CRITICAL/HIGH defect blocks, any malformed
+judge response blocks (fails closed), and any failed automated gate blocks.
+This separation (deterministic script owns the verdict, LLMs only supply
+evidence) follows the pattern used by
+[kimi-atlas](https://github.com/null0xxx/kimi-atlas)'s verification harness.
+
 ## Setup
 
 ```

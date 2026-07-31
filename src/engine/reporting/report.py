@@ -11,13 +11,24 @@ def generate_report(result: RunResult) -> str:
         f"**Attempts:** {result.attempts}",
         "",
     ]
-    for attempt_number, results in enumerate(result.verification_history, start=1):
-        lines.append(f"## Attempt {attempt_number}")
-        for r in results:
+    for attempt_number, record in enumerate(result.verification_history, start=1):
+        lines.append(f"## Attempt {attempt_number} - verdict: {record.status}")
+        for r in record.automated_results:
             status = "PASS" if r.passed else "FAIL"
             lines.append(f"- [{status}] {r.gate_name}")
-            if not r.passed:
-                detail = r.detail.strip().replace("\n", "\n  ")
-                lines.append(f"  ```\n  {detail}\n  ```")
+
+        defects = record.merged_critic.get("defects", [])
+        if defects:
+            lines.append("\nDefects:")
+            for d in defects:
+                lines.append(
+                    f"- [{d.get('severity')}] {d.get('category')} @ {d.get('location')}: "
+                    f"{d.get('fix')}"
+                )
+
+        schema_errors = record.merged_critic.get("schema_errors", [])
+        for err in schema_errors:
+            lines.append(f"- [SCHEMA ERROR] {err}")
+
         lines.append("")
     return "\n".join(lines)

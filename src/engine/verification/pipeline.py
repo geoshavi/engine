@@ -2,7 +2,8 @@ from pathlib import Path
 
 from engine.providers.base import Provider
 from engine.state.models import VerificationResult
-from engine.verification.automated import run_automated_gates
+from engine.verification import verdict
+from engine.verification.automated import automated_defects, run_automated_gates
 from engine.verification.judge import run_judge_gates
 
 
@@ -15,24 +16,39 @@ def read_code_snapshot(workspace: Path) -> str:
 
 def run_verification(
     workspace: Path, provider: Provider, judge_model: str, task_text: str
-) -> tuple[bool, list[VerificationResult]]:
+) -> tuple[str, dict, list[VerificationResult]]:
+    """Run the automated + LLM-judge lenses and return the deterministic verdict.
+
+    The LLM judges only ever produce structured defects; ``verdict.gate`` (pure
+    Python, no model call) is the sole function allowed to decide pass/fail.
+    Returns (status, merged_critic, automated_results).
+    """
     automated_results = run_automated_gates(workspace)
-    code_snapshot = read_code_snapshot(workspace)
-    judge_results = run_judge_gates(provider, judge_model, task_text, code_snapshot)
-
-    all_results = automated_results + judge_results
     automated_passed = all(r.passed for r in automated_results)
-    judge_passed_count = sum(1 for r in judge_results if r.passed)
-    judge_passed = judge_passed_count >= (len(judge_results) // 2 + 1) if judge_results else True
+    script_defects = automated_defects(automated_results)
 
-    return automated_passed and judge_passed, all_results
+    code_snapshot = read_code_snapshot(workspace)
+    critic_outputs, schema_errors = run_judge_gates(provider, judge_model, task_text, code_snapshot)
+
+    merged = verdict.merge(critic_outputs, script_defects)
+    if schema_errors:
+        merged = {**merged, "schema_errors": schema_errors}
+    status = verdict.gate(merged, automated_passed, schema_errors)
+
+    return status, merged, automated_results
 
 
-def build_retry_feedback(results: list[VerificationResult]) -> str:
-    failed = [r for r in results if not r.passed]
-    if not failed:
+def build_retry_feedback(merged: dict) -> str:
+    lines: list[str] = []
+
+    for d in merged.get("defects", []):
+        lines.append(
+            f"\n[{d.get('category')}/{d.get('severity')} @ {d.get('location')}]\n{d.get('fix')}"
+        )
+
+    for err in merged.get("schema_errors", []):
+        lines.append(f"\n[review-schema-error]\n{err}")
+
+    if not lines:
         return ""
-    lines = ["The previous attempt failed verification. Fix these issues:"]
-    for r in failed:
-        lines.append(f"\n[{r.gate_name}]\n{r.detail}")
-    return "\n".join(lines)
+    return "The previous attempt failed verification. Fix these issues:" + "".join(lines)

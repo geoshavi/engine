@@ -26,6 +26,18 @@ CREATE TABLE IF NOT EXISTS verification_results (
     detail TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS defects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES runs(id),
+    attempt_number INTEGER NOT NULL,
+    defect_id TEXT NOT NULL,
+    category TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    location TEXT NOT NULL,
+    fix TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
@@ -57,6 +69,27 @@ def record_verification(
         "INSERT INTO verification_results (run_id, attempt_number, gate_name, passed, detail) "
         "VALUES (?, ?, ?, ?, ?)",
         [(run_id, attempt_number, r.gate_name, int(r.passed), r.detail) for r in results],
+    )
+
+
+def record_defects(
+    conn: sqlite3.Connection, run_id: int, attempt_number: int, defects: list[dict]
+) -> None:
+    conn.executemany(
+        "INSERT INTO defects (run_id, attempt_number, defect_id, category, severity, location, fix) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [
+            (
+                run_id,
+                attempt_number,
+                d.get("id", ""),
+                d.get("category", ""),
+                d.get("severity", ""),
+                d.get("location", ""),
+                d.get("fix", ""),
+            )
+            for d in defects
+        ],
     )
 
 

@@ -61,7 +61,13 @@ def test_run_task_stops_at_max_retries_when_never_passing(monkeypatch, tmp_path:
 
     def fake_run_verification(workspace, provider, judge_model, task_text):
         attempts.append(1)
-        return False, [VerificationResult("ruff", False, "still broken")]
+        merged = {
+            "defects": [
+                {"id": "C1", "category": "CORRECTNESS", "severity": "HIGH", "location": "x", "fix": "y"}
+            ],
+            "verdict": "FAIL",
+        }
+        return "UNVERIFIED", merged, [VerificationResult("ruff", False, "still broken")]
 
     monkeypatch.setattr(engine_module, "run_verification", fake_run_verification)
 
@@ -82,7 +88,8 @@ def test_run_task_stops_early_once_verification_passes(monkeypatch, tmp_path: Pa
 
     def fake_run_verification(workspace, provider, judge_model, task_text):
         call_count["n"] += 1
-        return True, [VerificationResult("ruff", True, "ok")]
+        merged = {"defects": [], "verdict": "OK"}
+        return "OK", merged, [VerificationResult("ruff", True, "ok")]
 
     monkeypatch.setattr(engine_module, "run_verification", fake_run_verification)
 
