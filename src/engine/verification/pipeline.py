@@ -1,6 +1,8 @@
+import sqlite3
 from pathlib import Path
 
-from engine.providers.base import Provider
+from engine.runtime.budget import BudgetController
+from engine.runtime.gateway import LLMGateway
 from engine.state.models import VerificationResult
 from engine.verification import verdict
 from engine.verification.automated import automated_defects, run_automated_gates
@@ -15,7 +17,16 @@ def read_code_snapshot(workspace: Path) -> str:
 
 
 def run_verification(
-    workspace: Path, provider: Provider, judge_model: str, task_text: str
+    workspace: Path,
+    gateway: LLMGateway,
+    budget: BudgetController,
+    judge_model: str,
+    task_text: str,
+    *,
+    run_id: int | None,
+    task_id: str,
+    conn: sqlite3.Connection | None,
+    timeout_seconds: float | None = None,
 ) -> tuple[str, dict, list[VerificationResult]]:
     """Run the automated + LLM-judge lenses and return the deterministic verdict.
 
@@ -28,7 +39,17 @@ def run_verification(
     script_defects = automated_defects(automated_results)
 
     code_snapshot = read_code_snapshot(workspace)
-    critic_outputs, schema_errors = run_judge_gates(provider, judge_model, task_text, code_snapshot)
+    critic_outputs, schema_errors = run_judge_gates(
+        gateway,
+        budget,
+        judge_model,
+        task_text,
+        code_snapshot,
+        run_id=run_id,
+        task_id=task_id,
+        conn=conn,
+        timeout_seconds=timeout_seconds,
+    )
 
     merged = verdict.merge(critic_outputs, script_defects)
     if schema_errors:

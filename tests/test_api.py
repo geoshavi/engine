@@ -2,9 +2,14 @@ import json
 import threading
 import urllib.error
 import urllib.request
+from decimal import Decimal
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 
-from engine.api import _make_handler, review_code
+from engine.api import _make_handler, _review_budget, review_code
+from engine.config import Config
+from engine.runtime.budget import BudgetController
+from engine.runtime.gateway import LLMGateway
 from engine.state.models import VerificationResult
 
 
@@ -15,9 +20,40 @@ class _FakeProvider:
         raise AssertionError("review_code must go through run_verification, not call the provider itself")
 
 
+def _gateway() -> LLMGateway:
+    return LLMGateway(_FakeProvider())
+
+
+def _budget() -> BudgetController:
+    return BudgetController(max_tokens=100_000, planned_budget=Decimal("1.00"))
+
+
+def test_review_budget_uses_the_review_specific_lower_ceiling_not_the_generation_run_default() -> None:
+    config = Config(
+        anthropic_api_key="key",
+        openai_api_key=None,
+        google_api_key=None,
+        max_retries=3,
+        db_path=Path("unused"),
+        max_tokens=100_000,
+        timeout_seconds=600.0,
+        max_agents=10,
+        planned_budget=Decimal("1.00"),
+        review_max_tokens=10_000,
+        review_planned_budget=Decimal("0.10"),
+    )
+
+    budget = _review_budget(config)
+
+    assert budget.max_tokens == config.review_max_tokens
+    assert budget.planned_budget == config.review_planned_budget
+    assert budget.max_tokens < config.max_tokens
+    assert budget.planned_budget < config.planned_budget
+
+
 def test_review_code_refuses_unsafe_paths() -> None:
     result = review_code(
-        "add two numbers", {"../evil.py": "x = 1\n"}, _FakeProvider(), "judge-model"
+        "add two numbers", {"../evil.py": "x = 1\n"}, _gateway(), _budget(), "judge-model"
     )
 
     assert result["status"] == "UNVERIFIED"
@@ -26,7 +62,9 @@ def test_review_code_refuses_unsafe_paths() -> None:
 
 
 def test_review_code_rejects_empty_submission() -> None:
-    result = review_code("add two numbers", {"notes.txt": "not python"}, _FakeProvider(), "judge-model")
+    result = review_code(
+        "add two numbers", {"notes.txt": "not python"}, _gateway(), _budget(), "judge-model"
+    )
 
     assert result["status"] == "UNVERIFIED"
     assert result["defects"][0]["id"] == "NOCODE0"
@@ -34,9 +72,11 @@ def test_review_code_rejects_empty_submission() -> None:
 
 def test_review_code_runs_verification_pipeline_on_submitted_files(monkeypatch) -> None:
     captured_workspace = {}
+    captured_context = {}
 
-    def fake_run_verification(workspace, provider, judge_model, task_text):
+    def fake_run_verification(workspace, gateway, budget, judge_model, task_text, **kwargs):
         captured_workspace["files"] = sorted(p.name for p in workspace.rglob("*.py"))
+        captured_context.update(kwargs)
         merged = {"defects": [], "verdict": "OK"}
         return "OK", merged, [VerificationResult("ruff", True, "ok")]
 
@@ -45,13 +85,22 @@ def test_review_code_runs_verification_pipeline_on_submitted_files(monkeypatch) 
     monkeypatch.setattr(api_module, "run_verification", fake_run_verification)
 
     result = review_code(
-        "add two numbers", {"add.py": "def add(a, b):\n    return a + b\n"}, _FakeProvider(), "judge-model"
+        "add two numbers",
+        {"add.py": "def add(a, b):\n    return a + b\n"},
+        _gateway(),
+        _budget(),
+        "judge-model",
     )
 
     assert result["status"] == "OK"
     assert result["defects"] == []
     assert result["automated_results"] == [{"gate": "ruff", "passed": True, "detail": "ok"}]
     assert captured_workspace["files"] == ["add.py"]
+    # Stateless by design: no run_id, and conn is None so the Gateway skips
+    # writing metrics for review requests -- see api.py's module docstring.
+    assert captured_context["run_id"] is None
+    assert captured_context["conn"] is None
+    assert captured_context["task_id"]
 
 
 def _run_server(review):

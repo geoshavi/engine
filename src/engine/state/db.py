@@ -2,9 +2,15 @@ import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
+from decimal import Decimal
 from pathlib import Path
 
-from engine.state.models import AgentExecutionRecord, RunRecord, VerificationResult
+from engine.state.models import (
+    AgentExecutionMetric,
+    AgentExecutionRecord,
+    RunRecord,
+    VerificationResult,
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -49,6 +55,23 @@ CREATE TABLE IF NOT EXISTS agent_executions (
     subtask_text TEXT NOT NULL,
     success INTEGER NOT NULL,
     produced_files TEXT NOT NULL,
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS agent_execution_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES runs(id),
+    task_id TEXT NOT NULL,
+    agent_name TEXT NOT NULL,
+    model TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL,
+    output_tokens INTEGER NOT NULL,
+    cache_read_tokens INTEGER NOT NULL,
+    cache_creation_tokens INTEGER NOT NULL,
+    latency_ms INTEGER NOT NULL,
+    actual_spend TEXT,
+    status TEXT NOT NULL,
     error TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -128,6 +151,60 @@ def record_agent_executions(
             for r in records
         ],
     )
+
+
+def record_agent_execution_metric(conn: sqlite3.Connection, metric: AgentExecutionMetric) -> None:
+    """Written by the Gateway after every LLM call -- success or failure.
+    ``actual_spend`` is stored as TEXT (``str(Decimal)``), never as a
+    numeric SQLite column, so it round-trips at full precision instead of
+    passing through SQLite's float-based REAL storage class.
+    """
+    conn.execute(
+        "INSERT INTO agent_execution_metrics "
+        "(run_id, task_id, agent_name, model, input_tokens, output_tokens, "
+        "cache_read_tokens, cache_creation_tokens, latency_ms, actual_spend, status, error) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            metric.run_id,
+            metric.task_id,
+            metric.agent_name,
+            metric.model,
+            metric.input_tokens,
+            metric.output_tokens,
+            metric.cache_read_tokens,
+            metric.cache_creation_tokens,
+            metric.latency_ms,
+            str(metric.actual_spend) if metric.actual_spend is not None else None,
+            metric.status,
+            metric.error,
+        ),
+    )
+
+
+def get_agent_execution_metrics(conn: sqlite3.Connection, run_id: int) -> list[AgentExecutionMetric]:
+    rows = conn.execute(
+        "SELECT run_id, task_id, agent_name, model, input_tokens, output_tokens, "
+        "cache_read_tokens, cache_creation_tokens, latency_ms, actual_spend, status, error "
+        "FROM agent_execution_metrics WHERE run_id = ? ORDER BY id",
+        (run_id,),
+    ).fetchall()
+    return [
+        AgentExecutionMetric(
+            run_id=row[0],
+            task_id=row[1],
+            agent_name=row[2],
+            model=row[3],
+            input_tokens=row[4],
+            output_tokens=row[5],
+            cache_read_tokens=row[6],
+            cache_creation_tokens=row[7],
+            latency_ms=row[8],
+            actual_spend=Decimal(row[9]) if row[9] is not None else None,
+            status=row[10],
+            error=row[11],
+        )
+        for row in rows
+    ]
 
 
 def finish_run(conn: sqlite3.Connection, run_id: int, status: str, attempts: int) -> None:

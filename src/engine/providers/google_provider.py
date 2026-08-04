@@ -14,5 +14,6 @@ class GoogleProvider:
         system: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.0,
+        timeout_seconds: float | None = None,
     ) -> GenerationResult:
         raise NotImplementedError("GoogleProvider is a placeholder for M2 (multi-provider routing).")

@@ -1,3 +1,4 @@
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,8 @@ from engine.orchestrator.agents.registry import AGENT_REGISTRY, get_agent
 from engine.orchestrator.agents.research import ResearchAgent
 from engine.orchestrator.agents.testing import TestingAgent
 from engine.providers.base import GenerationResult, Message
+from engine.runtime.budget import BudgetController
+from engine.runtime.gateway import LLMGateway
 
 _AGENT_CLASSES = [CodingAgent, ResearchAgent, TestingAgent, RefactoringAgent]
 
@@ -27,11 +30,16 @@ class _FakeProvider:
         system: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.0,
+        timeout_seconds: float | None = None,
     ) -> GenerationResult:
         self.last_system = system
         return GenerationResult(
             text=self._response_text, model=model, provider=self.name, input_tokens=1, output_tokens=1
         )
+
+
+def _budget() -> BudgetController:
+    return BudgetController(max_tokens=100_000, planned_budget=Decimal("1.00"))
 
 
 def test_registry_contains_all_four_roles() -> None:
@@ -70,7 +78,15 @@ def test_agent_run_writes_parsed_files_and_uses_its_own_prompt(tmp_path: Path) -
         workspace.mkdir()
 
         output = agent.run(
-            AgentContext(task_text="do it", workspace=workspace, provider=provider, model="m")
+            AgentContext(
+                task_text="do it",
+                workspace=workspace,
+                gateway=LLMGateway(provider),
+                budget=_budget(),
+                model="claude-sonnet-5",
+                run_id=1,
+                task_id="task-1",
+            )
         )
 
         assert output.files == {"out.py": "x = 1\n"}, agent_cls.__name__
@@ -87,7 +103,15 @@ def test_agent_run_refuses_unsafe_paths(tmp_path: Path) -> None:
         workspace.mkdir()
 
         output = agent.run(
-            AgentContext(task_text="do it", workspace=workspace, provider=provider, model="m")
+            AgentContext(
+                task_text="do it",
+                workspace=workspace,
+                gateway=LLMGateway(provider),
+                budget=_budget(),
+                model="claude-sonnet-5",
+                run_id=1,
+                task_id="task-1",
+            )
         )
 
         assert output.skipped_paths == ["../escape.py"], agent_cls.__name__

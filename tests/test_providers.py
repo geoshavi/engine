@@ -1,3 +1,5 @@
+from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -11,8 +13,28 @@ from engine.providers.registry import build_provider
 def _fake_anthropic_response(text: str) -> SimpleNamespace:
     return SimpleNamespace(
         content=[SimpleNamespace(type="text", text=text)],
-        usage=SimpleNamespace(input_tokens=10, output_tokens=5),
+        usage=SimpleNamespace(
+            input_tokens=10, output_tokens=5, cache_read_input_tokens=2, cache_creation_input_tokens=3
+        ),
     )
+
+
+def _config(**overrides) -> Config:
+    defaults = {
+        "anthropic_api_key": None,
+        "openai_api_key": None,
+        "google_api_key": None,
+        "max_retries": 3,
+        "db_path": Path("unused"),
+        "max_tokens": 100_000,
+        "timeout_seconds": 600.0,
+        "max_agents": 10,
+        "planned_budget": Decimal("1.00"),
+        "review_max_tokens": 10_000,
+        "review_planned_budget": Decimal("0.10"),
+    }
+    defaults.update(overrides)
+    return Config(**defaults)
 
 
 def test_anthropic_provider_generate_parses_response() -> None:
@@ -32,27 +54,17 @@ def test_anthropic_provider_generate_parses_response() -> None:
         assert result.provider == "anthropic"
         assert result.input_tokens == 10
         assert result.output_tokens == 5
+        assert result.cache_read_tokens == 2
+        assert result.cache_creation_tokens == 3
 
 
 def test_build_provider_missing_key_raises() -> None:
-    config = Config(
-        anthropic_api_key=None,
-        openai_api_key=None,
-        google_api_key=None,
-        max_retries=3,
-        db_path="unused",
-    )
+    config = _config(anthropic_api_key=None)
     with pytest.raises(ValueError):
         build_provider("anthropic", config)
 
 
 def test_build_provider_unknown_name_raises() -> None:
-    config = Config(
-        anthropic_api_key="key",
-        openai_api_key=None,
-        google_api_key=None,
-        max_retries=3,
-        db_path="unused",
-    )
+    config = _config(anthropic_api_key="key")
     with pytest.raises(ValueError):
         build_provider("does-not-exist", config)

@@ -15,6 +15,8 @@ class GenerationResult:
     provider: str
     input_tokens: int
     output_tokens: int
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
     raw: Any = field(default=None, repr=False)
 
 
@@ -28,4 +30,5 @@ class Provider(Protocol):
         system: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.0,
+        timeout_seconds: float | None = None,
     ) -> GenerationResult: ...

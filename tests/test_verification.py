@@ -1,7 +1,10 @@
 import json
+from decimal import Decimal
 from pathlib import Path
 
 from engine.providers.base import GenerationResult, Message
+from engine.runtime.budget import BudgetController
+from engine.runtime.gateway import LLMGateway
 from engine.state.models import VerificationResult
 from engine.verification import pipeline, verdict
 from engine.verification.automated import automated_defects, run_automated_gates
@@ -70,10 +73,19 @@ class _FakeProvider:
         system: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.0,
+        timeout_seconds: float | None = None,
     ) -> GenerationResult:
         return GenerationResult(
             text=self._response_text, model=model, provider=self.name, input_tokens=1, output_tokens=1
         )
+
+
+def _gateway(response_text: str) -> LLMGateway:
+    return LLMGateway(_FakeProvider(response_text))
+
+
+def _budget() -> BudgetController:
+    return BudgetController(max_tokens=100_000, planned_budget=Decimal("1.00"))
 
 
 def _ok_critic_json() -> str:
@@ -93,8 +105,16 @@ def test_parse_critic_rejects_non_json_text() -> None:
 
 
 def test_run_judge_gates_returns_one_critic_per_lens() -> None:
-    provider = _FakeProvider(_ok_critic_json())
-    critics, schema_errors = run_judge_gates(provider, "fake-model", "do the thing", "print('hi')")
+    critics, schema_errors = run_judge_gates(
+        _gateway(_ok_critic_json()),
+        _budget(),
+        "claude-haiku-4-5-20251001",
+        "do the thing",
+        "print('hi')",
+        run_id=1,
+        task_id="task-1",
+        conn=None,
+    )
     assert schema_errors == []
     assert len(critics) == 3
 
@@ -139,7 +159,7 @@ def test_pipeline_run_verification_fails_when_judges_report_blocking_defects(
     monkeypatch.setattr(
         pipeline,
         "run_judge_gates",
-        lambda provider, model, task, code: (
+        lambda gateway, budget, model, task, code, **kwargs: (
             [
                 {"defects": [], "verdict": "OK"},
                 {
@@ -161,7 +181,14 @@ def test_pipeline_run_verification_fails_when_judges_report_blocking_defects(
     )
 
     status, merged, automated_results = pipeline.run_verification(
-        tmp_path, _FakeProvider(""), "fake-model", "task"
+        tmp_path,
+        _gateway(""),
+        _budget(),
+        "fake-model",
+        "task",
+        run_id=1,
+        task_id="task-1",
+        conn=None,
     )
 
     assert status == "UNVERIFIED"

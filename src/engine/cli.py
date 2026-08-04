@@ -4,8 +4,8 @@ from pathlib import Path
 
 from engine.config import load_config
 from engine.orchestrator.engine import run_task
-from engine.providers.registry import build_provider
 from engine.reporting.report import generate_report
+from engine.runtime.gateway import LLMGateway
 
 
 def main() -> None:
@@ -29,10 +29,10 @@ def main() -> None:
 
     if args.command == "run":
         config = load_config()
-        provider = build_provider(args.provider, config)
+        gateway = LLMGateway.from_config(args.provider, config)
         workspace = Path(args.workspace) if args.workspace else Path(".engine/workspace")
 
-        result = run_task(args.task, workspace, provider, config, provider_name=args.provider)
+        result = run_task(args.task, workspace, gateway, config, provider_name=args.provider)
 
         report = generate_report(result)
         print(report)

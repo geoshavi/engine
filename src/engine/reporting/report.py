@@ -1,4 +1,4 @@
-from engine.orchestrator.engine import RunResult
+from engine.state.models import RunResult
 
 
 def generate_report(result: RunResult) -> str:

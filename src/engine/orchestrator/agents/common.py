@@ -1,21 +1,41 @@
 import re
+import sqlite3
 from pathlib import Path
 
 from engine.orchestrator.agents.base import AgentContext, AgentOutput
-from engine.providers.base import Message, Provider
+from engine.providers.base import Message
+from engine.runtime.budget import BudgetController
+from engine.runtime.gateway import LLMGateway
 
 FILE_BLOCK_RE = re.compile(r"FILE:\s*(?P<path>\S+)\s*```(?:\w+)?\n(?P<content>.*?)```", re.DOTALL)
 
 
 def generate_text(
-    provider: Provider, model: str, system_prompt: str, task_text: str, feedback: str | None = None
+    gateway: LLMGateway,
+    budget: BudgetController,
+    model: str,
+    system_prompt: str,
+    task_text: str,
+    *,
+    agent_name: str,
+    run_id: int,
+    task_id: str,
+    conn: sqlite3.Connection | None,
+    timeout_seconds: float | None,
+    feedback: str | None = None,
 ) -> str:
     prompt = task_text if not feedback else f"{task_text}\n\n{feedback}"
-    result = provider.generate(
+    result = gateway.generate(
+        budget=budget,
         messages=[Message(role="user", content=prompt)],
         model=model,
         system=system_prompt,
         max_tokens=8000,
+        agent_name=agent_name,
+        run_id=run_id,
+        task_id=task_id,
+        conn=conn,
+        timeout_seconds=timeout_seconds,
     )
     return result.text
 
@@ -58,7 +78,17 @@ class PromptFileAgent:
     def run(self, context: AgentContext) -> AgentOutput:
         system_prompt = self.prompt_path.read_text().strip()
         response_text = generate_text(
-            context.provider, context.model, system_prompt, context.task_text, context.feedback
+            context.gateway,
+            context.budget,
+            context.model,
+            system_prompt,
+            context.task_text,
+            agent_name=type(self).__name__,
+            run_id=context.run_id,
+            task_id=context.task_id,
+            conn=context.conn,
+            timeout_seconds=context.timeout_seconds,
+            feedback=context.feedback,
         )
         files = parse_files(response_text)
         skipped_paths = write_files(context.workspace, files)

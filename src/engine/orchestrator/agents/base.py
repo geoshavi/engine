@@ -1,16 +1,23 @@
+import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
-from engine.providers.base import Provider
+from engine.runtime.budget import BudgetController
+from engine.runtime.gateway import LLMGateway
 
 
 @dataclass
 class AgentContext:
     task_text: str
     workspace: Path
-    provider: Provider
+    gateway: LLMGateway
+    budget: BudgetController
     model: str
+    run_id: int
+    task_id: str
+    conn: sqlite3.Connection | None = None
+    timeout_seconds: float | None = None
     feedback: str | None = None
 
 

@@ -1,4 +1,4 @@
-from anthropic import Anthropic
+from anthropic import NOT_GIVEN, Anthropic
 
 from engine.providers.base import GenerationResult, Message
 
@@ -16,13 +16,19 @@ class AnthropicProvider:
         system: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.0,
+        timeout_seconds: float | None = None,
     ) -> GenerationResult:
+        # The SDK's `timeout` default is a NOT_GIVEN sentinel, not None --
+        # explicitly passing timeout=None disables the timeout entirely
+        # rather than falling back to the client's default. Only pass a real
+        # value through when the caller actually asked for one.
         response = self._client.messages.create(
             model=model,
             system=system or "",
             messages=[{"role": m.role, "content": m.content} for m in messages],
             max_tokens=max_tokens,
             temperature=temperature,
+            timeout=timeout_seconds if timeout_seconds is not None else NOT_GIVEN,
         )
         text = "".join(block.text for block in response.content if block.type == "text")
         return GenerationResult(
@@ -31,5 +37,7 @@ class AnthropicProvider:
             provider=self.name,
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
+            cache_read_tokens=response.usage.cache_read_input_tokens or 0,
+            cache_creation_tokens=response.usage.cache_creation_input_tokens or 0,
             raw=response,
         )

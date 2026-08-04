@@ -1,45 +1,14 @@
+from decimal import Decimal
 from pathlib import Path
 
 from engine.config import Config
 from engine.orchestrator import engine as engine_module
+from engine.orchestrator import manager as manager_module
 from engine.orchestrator.agents.common import parse_files, write_files
-from engine.orchestrator.planner import PlannedTask, plan_subtasks, validate_plan
+from engine.orchestrator.execution_plan import ExecutionPlan, ExecutionStep
 from engine.providers.base import GenerationResult, Message
+from engine.runtime.gateway import LLMGateway
 from engine.state.models import VerificationResult
-
-
-def test_plan_subtasks_returns_research_coding_testing_in_priority_order() -> None:
-    plan = plan_subtasks("do the thing")
-
-    assert [t.agent_role for t in plan] == ["research", "coding", "testing"]
-    assert [t.priority for t in plan] == [1, 2, 3]
-    assert all(t.subtask_text == "do the thing" for t in plan)
-    assert plan[1].dependencies == ["research"]
-    assert plan[2].dependencies == ["coding"]
-
-
-def test_validate_plan_accepts_the_default_plan() -> None:
-    plan = plan_subtasks("do the thing")
-    assert validate_plan(plan, {"research", "coding", "testing", "refactoring"}) == []
-
-
-def test_validate_plan_rejects_unknown_role() -> None:
-    plan = plan_subtasks("do the thing")
-    errors = validate_plan(plan, {"coding", "testing"})
-    assert any("research" in e for e in errors)
-
-
-def test_validate_plan_rejects_forward_dependency() -> None:
-    plan = [
-        PlannedTask(agent_role="coding", subtask_text="x", priority=1, dependencies=["testing"]),
-        PlannedTask(agent_role="testing", subtask_text="y", priority=2),
-    ]
-    errors = validate_plan(plan, {"coding", "testing"})
-    assert any("testing" in e for e in errors)
-
-
-def test_validate_plan_rejects_empty_plan() -> None:
-    assert validate_plan([], {"coding"}) != []
 
 
 def test_parse_files_handles_multiple_files() -> None:
@@ -93,10 +62,15 @@ class _FakeProvider:
         system: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.0,
+        timeout_seconds: float | None = None,
     ) -> GenerationResult:
         return GenerationResult(
             text=self._response_text, model=model, provider=self.name, input_tokens=1, output_tokens=1
         )
+
+
+def _gateway(response_text: str) -> LLMGateway:
+    return LLMGateway(_FakeProvider(response_text))
 
 
 def _config(tmp_path: Path) -> Config:
@@ -106,13 +80,25 @@ def _config(tmp_path: Path) -> Config:
         google_api_key=None,
         max_retries=3,
         db_path=tmp_path / "state.db",
+        max_tokens=100_000,
+        timeout_seconds=600.0,
+        max_agents=10,
+        planned_budget=Decimal("1.00"),
+        review_max_tokens=10_000,
+        review_planned_budget=Decimal("0.10"),
     )
+
+
+# run_verification is called from inside manager.py now, not engine.py --
+# monkeypatch it there. build_execution_plan is still called directly from
+# engine.run_task, so that one patches at engine_module (see the
+# invalid-plan test below).
 
 
 def test_run_task_stops_at_max_retries_when_never_passing(monkeypatch, tmp_path: Path) -> None:
     attempts = []
 
-    def fake_run_verification(workspace, provider, judge_model, task_text):
+    def fake_run_verification(workspace, gateway, budget, judge_model, task_text, **kwargs):
         attempts.append(1)
         merged = {
             "defects": [
@@ -122,12 +108,12 @@ def test_run_task_stops_at_max_retries_when_never_passing(monkeypatch, tmp_path:
         }
         return "UNVERIFIED", merged, [VerificationResult("ruff", False, "still broken")]
 
-    monkeypatch.setattr(engine_module, "run_verification", fake_run_verification)
+    monkeypatch.setattr(manager_module, "run_verification", fake_run_verification)
 
     result = engine_module.run_task(
         "do the thing",
         tmp_path / "workspace",
-        _FakeProvider("FILE: solution.py\n```\nx = 1\n```\n"),
+        _gateway("FILE: solution.py\n```\nx = 1\n```\n"),
         _config(tmp_path),
     )
 
@@ -137,8 +123,8 @@ def test_run_task_stops_at_max_retries_when_never_passing(monkeypatch, tmp_path:
 
 
 def test_run_task_resets_workspace_between_attempts(monkeypatch, tmp_path: Path) -> None:
-    # The default plan now dispatches 3 agents (research, coding, testing)
-    # per attempt, so each attempt consumes 3 provider calls, not 1. This
+    # The default plan dispatches 3 agents (research, coding, testing) per
+    # attempt, so each attempt consumes 3 provider calls, not 1. This
     # provider returns a distinct file per call so the test can assert that
     # attempt 2's snapshot contains none of attempt 1's files.
     class _CountingProvider:
@@ -154,6 +140,7 @@ def test_run_task_resets_workspace_between_attempts(monkeypatch, tmp_path: Path)
             system: str | None = None,
             max_tokens: int = 4096,
             temperature: float = 0.0,
+            timeout_seconds: float | None = None,
         ) -> GenerationResult:
             text = f"FILE: file_{self.calls}.py\n```\nx = {self.calls}\n```\n"
             self.calls += 1
@@ -161,7 +148,7 @@ def test_run_task_resets_workspace_between_attempts(monkeypatch, tmp_path: Path)
 
     workspace_snapshots: list[list[str]] = []
 
-    def fake_run_verification(workspace, provider, judge_model, task_text):
+    def fake_run_verification(workspace, gateway, budget, judge_model, task_text, **kwargs):
         workspace_snapshots.append(sorted(p.name for p in workspace.iterdir()))
         if len(workspace_snapshots) == 1:
             merged = {
@@ -174,10 +161,10 @@ def test_run_task_resets_workspace_between_attempts(monkeypatch, tmp_path: Path)
         merged = {"defects": [], "verdict": "OK"}
         return "OK", merged, [VerificationResult("ruff", True, "ok")]
 
-    monkeypatch.setattr(engine_module, "run_verification", fake_run_verification)
+    monkeypatch.setattr(manager_module, "run_verification", fake_run_verification)
 
     result = engine_module.run_task(
-        "do the thing", tmp_path / "workspace", _CountingProvider(), _config(tmp_path)
+        "do the thing", tmp_path / "workspace", LLMGateway(_CountingProvider()), _config(tmp_path)
     )
 
     assert workspace_snapshots == [
@@ -194,11 +181,13 @@ def test_run_task_treats_unsafe_path_as_deterministic_failure(monkeypatch, tmp_p
         called["n"] += 1
         return "OK", {"defects": [], "verdict": "OK"}, []
 
-    monkeypatch.setattr(engine_module, "run_verification", fake_run_verification)
+    monkeypatch.setattr(manager_module, "run_verification", fake_run_verification)
 
-    provider = _FakeProvider("FILE: ../evil.py\n```\nx = 1\n```\n")
     result = engine_module.run_task(
-        "do the thing", tmp_path / "workspace", provider, _config(tmp_path)
+        "do the thing",
+        tmp_path / "workspace",
+        _gateway("FILE: ../evil.py\n```\nx = 1\n```\n"),
+        _config(tmp_path),
     )
 
     assert result.passed is False
@@ -216,11 +205,13 @@ def test_run_task_treats_empty_generation_as_deterministic_failure(monkeypatch, 
         called["n"] += 1
         return "OK", {"defects": [], "verdict": "OK"}, []
 
-    monkeypatch.setattr(engine_module, "run_verification", fake_run_verification)
+    monkeypatch.setattr(manager_module, "run_verification", fake_run_verification)
 
-    provider = _FakeProvider("sorry, I could not produce any code for this task.")
     result = engine_module.run_task(
-        "do the thing", tmp_path / "workspace", provider, _config(tmp_path)
+        "do the thing",
+        tmp_path / "workspace",
+        _gateway("sorry, I could not produce any code for this task."),
+        _config(tmp_path),
     )
 
     assert result.passed is False
@@ -230,7 +221,7 @@ def test_run_task_treats_empty_generation_as_deterministic_failure(monkeypatch, 
     assert defects[0]["id"] == "NOCODE0"
 
 
-def test_run_task_survives_provider_exception(monkeypatch, tmp_path: Path) -> None:
+def test_run_task_survives_provider_exception(tmp_path: Path) -> None:
     class _ExplodingProvider:
         name = "fake"
 
@@ -238,7 +229,7 @@ def test_run_task_survives_provider_exception(monkeypatch, tmp_path: Path) -> No
             raise RuntimeError("connection reset")
 
     result = engine_module.run_task(
-        "do the thing", tmp_path / "workspace", _ExplodingProvider(), _config(tmp_path)
+        "do the thing", tmp_path / "workspace", LLMGateway(_ExplodingProvider()), _config(tmp_path)
     )
 
     assert result.passed is False
@@ -251,17 +242,17 @@ def test_run_task_survives_provider_exception(monkeypatch, tmp_path: Path) -> No
 def test_run_task_stops_early_once_verification_passes(monkeypatch, tmp_path: Path) -> None:
     call_count = {"n": 0}
 
-    def fake_run_verification(workspace, provider, judge_model, task_text):
+    def fake_run_verification(workspace, gateway, budget, judge_model, task_text, **kwargs):
         call_count["n"] += 1
         merged = {"defects": [], "verdict": "OK"}
         return "OK", merged, [VerificationResult("ruff", True, "ok")]
 
-    monkeypatch.setattr(engine_module, "run_verification", fake_run_verification)
+    monkeypatch.setattr(manager_module, "run_verification", fake_run_verification)
 
     result = engine_module.run_task(
         "do the thing",
         tmp_path / "workspace",
-        _FakeProvider("FILE: solution.py\n```\nx = 1\n```\n"),
+        _gateway("FILE: solution.py\n```\nx = 1\n```\n"),
         _config(tmp_path),
     )
 
@@ -273,15 +264,15 @@ def test_run_task_stops_early_once_verification_passes(monkeypatch, tmp_path: Pa
 def test_run_task_records_one_agent_execution_per_role_in_priority_order(
     monkeypatch, tmp_path: Path
 ) -> None:
-    def fake_run_verification(workspace, provider, judge_model, task_text):
+    def fake_run_verification(workspace, gateway, budget, judge_model, task_text, **kwargs):
         return "OK", {"defects": [], "verdict": "OK"}, [VerificationResult("ruff", True, "ok")]
 
-    monkeypatch.setattr(engine_module, "run_verification", fake_run_verification)
+    monkeypatch.setattr(manager_module, "run_verification", fake_run_verification)
 
     result = engine_module.run_task(
         "do the thing",
         tmp_path / "workspace",
-        _FakeProvider("FILE: solution.py\n```\nx = 1\n```\n"),
+        _gateway("FILE: solution.py\n```\nx = 1\n```\n"),
         _config(tmp_path),
     )
 
@@ -292,7 +283,7 @@ def test_run_task_records_one_agent_execution_per_role_in_priority_order(
     assert {r.agent_name for r in records} == {"ResearchAgent", "CodingAgent", "TestingAgent"}
 
 
-def test_run_task_records_partial_agent_executions_on_failure(monkeypatch, tmp_path: Path) -> None:
+def test_run_task_records_partial_agent_executions_on_failure(tmp_path: Path) -> None:
     class _FailOnSecondCall:
         name = "fake"
 
@@ -304,11 +295,15 @@ def test_run_task_records_partial_agent_executions_on_failure(monkeypatch, tmp_p
             if self.calls == 2:
                 raise RuntimeError("connection reset")
             return GenerationResult(
-                text="FILE: notes.md\n```\nok\n```\n", model="m", provider=self.name, input_tokens=1, output_tokens=1
+                text="FILE: notes.md\n```\nok\n```\n",
+                model="m",
+                provider=self.name,
+                input_tokens=1,
+                output_tokens=1,
             )
 
     result = engine_module.run_task(
-        "do the thing", tmp_path / "workspace", _FailOnSecondCall(), _config(tmp_path)
+        "do the thing", tmp_path / "workspace", LLMGateway(_FailOnSecondCall()), _config(tmp_path)
     )
 
     records = result.verification_history[0].agent_executions
@@ -319,12 +314,21 @@ def test_run_task_records_partial_agent_executions_on_failure(monkeypatch, tmp_p
 
 
 def test_run_task_records_invalid_plan_as_single_failed_attempt(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(
-        engine_module, "plan_subtasks", lambda task_text: [PlannedTask(agent_role="ghost", subtask_text=task_text, priority=1)]
-    )
+    def fake_build_execution_plan(analysis, config):
+        return ExecutionPlan(
+            task_id=analysis.task_id,
+            task_text=analysis.task_text,
+            steps=[ExecutionStep(agent="ghost")],
+            max_tokens=config.max_tokens,
+            timeout_seconds=config.timeout_seconds,
+            max_agents=config.max_agents,
+            planned_budget=config.planned_budget,
+        )
+
+    monkeypatch.setattr(engine_module, "build_execution_plan", fake_build_execution_plan)
 
     result = engine_module.run_task(
-        "do the thing", tmp_path / "workspace", _FakeProvider("irrelevant"), _config(tmp_path)
+        "do the thing", tmp_path / "workspace", _gateway("irrelevant"), _config(tmp_path)
     )
 
     assert result.passed is False
