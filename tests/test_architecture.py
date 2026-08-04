@@ -30,6 +30,22 @@ alone:
           reason runtime/ lives outside orchestrator/ in the first place
           (so verification/ can import it without reaching into
           orchestrator/).
+  Rule D: eval/ may only depend on verification/, runtime/, and state/
+          (plus engine.config, needed everywhere, and stdlib/third-party).
+          Everything else -- orchestrator/ (including agents/), providers/,
+          api.py, cli.py, reporting/, routing/ -- is forbidden. This is
+          stricter than "don't import providers/ or an SDK" (which Rule
+          A/B already give eval/ for free by placement under src/engine/):
+          it caught a real violation during development, where eval/runner.py
+          imported write_files from orchestrator/agents/common.py. Fixed by
+          giving eval/ its own minimal file-writer instead -- dataset file
+          paths are hand-authored, not LLM output, so they don't need
+          write_files()'s path-traversal guard in the first place.
+  Rule E: verification/, runtime/, and state/ must never import eval/ --
+          the dependency runs one way only (eval -> verification/runtime/
+          state). Eval is a *client* of the review flow, not a dependency
+          of it; those three packages must stay usable without eval/ ever
+          being on the import path.
 """
 
 import ast
@@ -47,6 +63,10 @@ ALLOWED_FROM_IMPORTS = {("engine.providers.registry", "DEFAULT_MODELS")}
 ALLOWED_BASE_MODULE = "engine.providers.base"
 
 GATEWAY_FILE = SRC_ROOT / "runtime" / "gateway.py"
+
+# eval/'s allowed engine.* dependency surface -- see Rule D docstring above.
+EVAL_ALLOWED_ENGINE_PACKAGES = {"engine.eval", "engine.verification", "engine.runtime", "engine.state"}
+EVAL_ALLOWED_EXACT_MODULES = {"engine.config"}
 
 
 def _iter_source_files() -> list[Path]:
@@ -153,4 +173,44 @@ def test_rule_c_providers_does_not_import_runtime() -> None:
     assert not violations, (
         "providers/ must not import runtime/ -- the dependency runs one way only "
         "(gateway -> provider):\n" + "\n".join(violations)
+    )
+
+
+def test_rule_d_eval_only_depends_on_verification_runtime_state() -> None:
+    violations = []
+    for path in _iter_source_files():
+        if not _is_in_package(path, "eval"):
+            continue
+        for name in _imported_module_names(path):
+            if not name.startswith("engine."):
+                continue
+            if name in EVAL_ALLOWED_EXACT_MODULES:
+                continue
+            if any(name == pkg or name.startswith(f"{pkg}.") for pkg in EVAL_ALLOWED_ENGINE_PACKAGES):
+                continue
+            violations.append(f"{_relative(path)}: imports {name!r} (Rule D)")
+    assert not violations, (
+        "eval/ may only depend on verification/, runtime/, and state/ (plus engine.config) -- "
+        "orchestrator/, providers/, api.py, cli.py, reporting/, routing/ are all forbidden:\n"
+        + "\n".join(violations)
+    )
+
+
+def test_rule_e_eval_is_never_imported_by_verification_runtime_state() -> None:
+    violations = []
+    for path in _iter_source_files():
+        if _is_in_package(path, "eval"):
+            continue
+        if not (
+            _is_in_package(path, "verification")
+            or _is_in_package(path, "runtime")
+            or _is_in_package(path, "state")
+        ):
+            continue
+        for name in _imported_module_names(path):
+            if name == "engine.eval" or name.startswith("engine.eval."):
+                violations.append(f"{_relative(path)}: imports {name!r} (Rule E)")
+    assert not violations, (
+        "verification/, runtime/, and state/ must never import eval/ -- the dependency runs "
+        "one way only (eval -> verification/runtime/state):\n" + "\n".join(violations)
     )
