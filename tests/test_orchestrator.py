@@ -2,14 +2,44 @@ from pathlib import Path
 
 from engine.config import Config
 from engine.orchestrator import engine as engine_module
-from engine.orchestrator.planner import plan_subtasks
-from engine.orchestrator.subagent import parse_files, write_files
+from engine.orchestrator.agents.common import parse_files, write_files
+from engine.orchestrator.planner import PlannedTask, plan_subtasks, validate_plan
 from engine.providers.base import GenerationResult, Message
 from engine.state.models import VerificationResult
 
 
-def test_plan_subtasks_is_single_item_for_mvp() -> None:
-    assert plan_subtasks("do the thing") == ["do the thing"]
+def test_plan_subtasks_returns_research_coding_testing_in_priority_order() -> None:
+    plan = plan_subtasks("do the thing")
+
+    assert [t.agent_role for t in plan] == ["research", "coding", "testing"]
+    assert [t.priority for t in plan] == [1, 2, 3]
+    assert all(t.subtask_text == "do the thing" for t in plan)
+    assert plan[1].dependencies == ["research"]
+    assert plan[2].dependencies == ["coding"]
+
+
+def test_validate_plan_accepts_the_default_plan() -> None:
+    plan = plan_subtasks("do the thing")
+    assert validate_plan(plan, {"research", "coding", "testing", "refactoring"}) == []
+
+
+def test_validate_plan_rejects_unknown_role() -> None:
+    plan = plan_subtasks("do the thing")
+    errors = validate_plan(plan, {"coding", "testing"})
+    assert any("research" in e for e in errors)
+
+
+def test_validate_plan_rejects_forward_dependency() -> None:
+    plan = [
+        PlannedTask(agent_role="coding", subtask_text="x", priority=1, dependencies=["testing"]),
+        PlannedTask(agent_role="testing", subtask_text="y", priority=2),
+    ]
+    errors = validate_plan(plan, {"coding", "testing"})
+    assert any("testing" in e for e in errors)
+
+
+def test_validate_plan_rejects_empty_plan() -> None:
+    assert validate_plan([], {"coding"}) != []
 
 
 def test_parse_files_handles_multiple_files() -> None:
@@ -107,12 +137,11 @@ def test_run_task_stops_at_max_retries_when_never_passing(monkeypatch, tmp_path:
 
 
 def test_run_task_resets_workspace_between_attempts(monkeypatch, tmp_path: Path) -> None:
-    responses = [
-        "FILE: a.py\n```\nx = 1\n```\n",
-        "FILE: b.py\n```\ny = 2\n```\n",
-    ]
-
-    class _SequencedProvider:
+    # The default plan now dispatches 3 agents (research, coding, testing)
+    # per attempt, so each attempt consumes 3 provider calls, not 1. This
+    # provider returns a distinct file per call so the test can assert that
+    # attempt 2's snapshot contains none of attempt 1's files.
+    class _CountingProvider:
         name = "fake"
 
         def __init__(self) -> None:
@@ -126,7 +155,7 @@ def test_run_task_resets_workspace_between_attempts(monkeypatch, tmp_path: Path)
             max_tokens: int = 4096,
             temperature: float = 0.0,
         ) -> GenerationResult:
-            text = responses[self.calls]
+            text = f"FILE: file_{self.calls}.py\n```\nx = {self.calls}\n```\n"
             self.calls += 1
             return GenerationResult(text=text, model=model, provider=self.name, input_tokens=1, output_tokens=1)
 
@@ -148,10 +177,13 @@ def test_run_task_resets_workspace_between_attempts(monkeypatch, tmp_path: Path)
     monkeypatch.setattr(engine_module, "run_verification", fake_run_verification)
 
     result = engine_module.run_task(
-        "do the thing", tmp_path / "workspace", _SequencedProvider(), _config(tmp_path)
+        "do the thing", tmp_path / "workspace", _CountingProvider(), _config(tmp_path)
     )
 
-    assert workspace_snapshots == [["a.py"], ["b.py"]]
+    assert workspace_snapshots == [
+        ["file_0.py", "file_1.py", "file_2.py"],
+        ["file_3.py", "file_4.py", "file_5.py"],
+    ]
     assert result.passed is True
 
 
@@ -236,3 +268,67 @@ def test_run_task_stops_early_once_verification_passes(monkeypatch, tmp_path: Pa
     assert result.passed is True
     assert result.attempts == 1
     assert call_count["n"] == 1
+
+
+def test_run_task_records_one_agent_execution_per_role_in_priority_order(
+    monkeypatch, tmp_path: Path
+) -> None:
+    def fake_run_verification(workspace, provider, judge_model, task_text):
+        return "OK", {"defects": [], "verdict": "OK"}, [VerificationResult("ruff", True, "ok")]
+
+    monkeypatch.setattr(engine_module, "run_verification", fake_run_verification)
+
+    result = engine_module.run_task(
+        "do the thing",
+        tmp_path / "workspace",
+        _FakeProvider("FILE: solution.py\n```\nx = 1\n```\n"),
+        _config(tmp_path),
+    )
+
+    records = result.verification_history[0].agent_executions
+    assert [r.agent_role for r in records] == ["research", "coding", "testing"]
+    assert all(r.success for r in records)
+    assert all(r.produced_files == ["solution.py"] for r in records)
+    assert {r.agent_name for r in records} == {"ResearchAgent", "CodingAgent", "TestingAgent"}
+
+
+def test_run_task_records_partial_agent_executions_on_failure(monkeypatch, tmp_path: Path) -> None:
+    class _FailOnSecondCall:
+        name = "fake"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(self, *args, **kwargs) -> GenerationResult:
+            self.calls += 1
+            if self.calls == 2:
+                raise RuntimeError("connection reset")
+            return GenerationResult(
+                text="FILE: notes.md\n```\nok\n```\n", model="m", provider=self.name, input_tokens=1, output_tokens=1
+            )
+
+    result = engine_module.run_task(
+        "do the thing", tmp_path / "workspace", _FailOnSecondCall(), _config(tmp_path)
+    )
+
+    records = result.verification_history[0].agent_executions
+    assert [r.agent_role for r in records] == ["research", "coding"]
+    assert records[0].success is True
+    assert records[1].success is False
+    assert "connection reset" in records[1].error
+
+
+def test_run_task_records_invalid_plan_as_single_failed_attempt(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        engine_module, "plan_subtasks", lambda task_text: [PlannedTask(agent_role="ghost", subtask_text=task_text, priority=1)]
+    )
+
+    result = engine_module.run_task(
+        "do the thing", tmp_path / "workspace", _FakeProvider("irrelevant"), _config(tmp_path)
+    )
+
+    assert result.passed is False
+    assert result.attempts == 1
+    defects = result.verification_history[0].merged_critic["defects"]
+    assert defects[0]["id"] == "PLAN0"
+    assert "ghost" in defects[0]["fix"]

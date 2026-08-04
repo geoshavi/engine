@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from engine.config import Config, load_config
-from engine.orchestrator.subagent import write_files
+from engine.orchestrator.agents.common import write_files
 from engine.providers.base import Provider
 from engine.providers.registry import DEFAULT_MODELS, build_provider
 from engine.verification.pipeline import run_verification

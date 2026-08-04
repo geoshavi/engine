@@ -1,26 +1,20 @@
 import re
 from pathlib import Path
 
+from engine.orchestrator.agents.base import AgentContext, AgentOutput
 from engine.providers.base import Message, Provider
-
-AGENT_PROMPT_PATH = Path(__file__).parent / "agent.md"
-
-
-def load_system_prompt() -> str:
-    return AGENT_PROMPT_PATH.read_text().strip()
-
 
 FILE_BLOCK_RE = re.compile(r"FILE:\s*(?P<path>\S+)\s*```(?:\w+)?\n(?P<content>.*?)```", re.DOTALL)
 
 
-def generate_code(
-    provider: Provider, model: str, task_text: str, feedback: str | None = None
+def generate_text(
+    provider: Provider, model: str, system_prompt: str, task_text: str, feedback: str | None = None
 ) -> str:
     prompt = task_text if not feedback else f"{task_text}\n\n{feedback}"
     result = provider.generate(
         messages=[Message(role="user", content=prompt)],
         model=model,
-        system=load_system_prompt(),
+        system=system_prompt,
         max_tokens=8000,
     )
     return result.text
@@ -50,3 +44,22 @@ def write_files(workspace: Path, files: dict[str, str]) -> list[str]:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content)
     return skipped
+
+
+class PromptFileAgent:
+    """Shared implementation for agents whose entire behavior is: load a
+    static system prompt, ask the provider for FILE: blocks, write them into
+    the workspace. Concrete agents just set ``role`` and ``prompt_path``.
+    """
+
+    role: str
+    prompt_path: Path
+
+    def run(self, context: AgentContext) -> AgentOutput:
+        system_prompt = self.prompt_path.read_text().strip()
+        response_text = generate_text(
+            context.provider, context.model, system_prompt, context.task_text, context.feedback
+        )
+        files = parse_files(response_text)
+        skipped_paths = write_files(context.workspace, files)
+        return AgentOutput(files=files, skipped_paths=skipped_paths)

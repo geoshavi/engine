@@ -9,7 +9,10 @@ from engine.providers.openai_provider import OpenAIProvider
 # system learns per-task-class choices from real verification outcomes.
 DEFAULT_MODELS = {
     "anthropic": {
-        "coder": "claude-sonnet-5",
+        "coding": "claude-sonnet-5",
+        "research": "claude-sonnet-5",
+        "testing": "claude-sonnet-5",
+        "refactoring": "claude-sonnet-5",
         "judge": "claude-haiku-4-5-20251001",
         "planner": "claude-sonnet-5",
     },

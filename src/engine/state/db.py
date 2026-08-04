@@ -1,9 +1,10 @@
+import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from engine.state.models import RunRecord, VerificationResult
+from engine.state.models import AgentExecutionRecord, RunRecord, VerificationResult
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -36,6 +37,19 @@ CREATE TABLE IF NOT EXISTS defects (
     severity TEXT NOT NULL,
     location TEXT NOT NULL,
     fix TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS agent_executions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES runs(id),
+    attempt_number INTEGER NOT NULL,
+    agent_name TEXT NOT NULL,
+    agent_role TEXT NOT NULL,
+    subtask_text TEXT NOT NULL,
+    success INTEGER NOT NULL,
+    produced_files TEXT NOT NULL,
+    error TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 """
@@ -89,6 +103,29 @@ def record_defects(
                 d.get("fix", ""),
             )
             for d in defects
+        ],
+    )
+
+
+def record_agent_executions(
+    conn: sqlite3.Connection, run_id: int, attempt_number: int, records: list[AgentExecutionRecord]
+) -> None:
+    conn.executemany(
+        "INSERT INTO agent_executions "
+        "(run_id, attempt_number, agent_name, agent_role, subtask_text, success, produced_files, error) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (
+                run_id,
+                attempt_number,
+                r.agent_name,
+                r.agent_role,
+                r.subtask_text,
+                int(r.success),
+                json.dumps(r.produced_files),
+                r.error,
+            )
+            for r in records
         ],
     )
 
