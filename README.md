@@ -47,3 +47,51 @@ and full run/verification history in `.engine/state.db`.
 ```
 pytest
 ```
+
+## n8n (local workflow automation)
+
+Runs via Docker Compose alongside `engine-api`, a small HTTP wrapper around the
+same verification pipeline `engine run` uses — the difference is `engine-api`
+reviews code you already wrote instead of generating new code first.
+
+```
+docker compose up -d      # start n8n (:5678) + engine-api (:8000)
+docker compose down       # stop (data persists in the n8n_data / engine_review_data volumes)
+```
+
+Uses `N8N_ENCRYPTION_KEY` from `.env` (generate with `openssl rand -hex 32`);
+changing it after workflows/credentials exist makes stored credentials
+unreadable.
+
+### Code-review webhook
+
+`engine-api`'s only endpoint:
+
+```
+POST /review
+{
+  "task": "what this code is supposed to do",
+  "files": {"solution.py": "...", "test_solution.py": "..."}
+}
+```
+
+Returns `{"status": "OK" | "UNVERIFIED", "defects": [...], "automated_results": [...]}` —
+same deterministic verdict, same orchestrated correctness/security/code-quality
+judge lenses as `engine run`, just skipping code generation.
+
+Import `n8n-workflows/code-review.json` into n8n (menu → *Import from File*) to get
+a ready `Webhook -> Call Engine Review -> Respond to Webhook` workflow. It POSTs
+whatever the webhook receives straight to `http://engine-api:8000/review` (reachable
+by service name on the compose network) and echoes the JSON verdict back as the
+HTTP response — call it with:
+
+```
+curl -X POST http://localhost:5678/webhook/review \
+  -H "Content-Type: application/json" \
+  -d '{"task": "add two numbers", "files": {"add.py": "def add(a, b):\n    return a - b\n"}}'
+```
+
+**Known limitation:** the automated gates run `pytest` on submitted files directly
+in the `engine-api` container — there is no sandboxing beyond the container
+boundary itself. Don't expose this webhook to the public internet without adding
+auth and/or real sandboxing in front of it.

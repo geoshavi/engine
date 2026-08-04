@@ -19,6 +19,12 @@ def main() -> None:
     )
     run_parser.add_argument("--provider", default="anthropic", help="Provider to use")
 
+    serve_parser = subparsers.add_parser(
+        "serve", help="Run the code-review HTTP API (for n8n or other automation)"
+    )
+    serve_parser.add_argument("--port", type=int, default=8000)
+    serve_parser.add_argument("--provider", default="anthropic", help="Provider to use")
+
     args = parser.parse_args()
 
     if args.command == "run":
@@ -34,6 +40,10 @@ def main() -> None:
         report_path.write_text(report)
 
         sys.exit(0 if result.passed else 1)
+    elif args.command == "serve":
+        from engine.api import serve
+
+        serve(port=args.port, provider_name=args.provider)
 
 
 if __name__ == "__main__":
