@@ -1,15 +1,25 @@
 # engine
 
-AI agent orchestration engine: an orchestrator agent spawns coding sub-agents,
-then runs their output through a multi-layer verification pipeline (automated
-gates + independent LLM-judge review) before accepting it.
+AI agent orchestration engine: an orchestrator analyzes a task, builds a
+validated execution plan, dispatches specialized sub-agents under enforced
+token/spend limits, then runs their output through a multi-layer verification
+pipeline (automated gates + independent LLM-judge review) before accepting it.
 
 ## Status
 
-MVP: single provider (Anthropic), sequential single sub-agent, bounded retry
-loop, automated gates (ruff/mypy/pytest) + 3-lens LLM-judge review, SQLite run
-history. Multi-provider routing, parallel sub-agents, and experiment-based
-model selection are stubbed out for later milestones (see `routing/`).
+Working runtime: single provider (Anthropic), sequential multi-agent execution
+(coding / research / testing / refactoring), bounded retry loop, automated gates
+(ruff/mypy/pytest) + 3-lens LLM-judge review, deterministic verdict, SQLite run
+history and per-call metrics. 77 tests.
+
+Every LLM call in the codebase — agents and judge lenses alike — routes through
+a single gateway (`runtime/gateway.py`) that enforces a token/spend budget
+before the call and records usage after it. Limits are enforced at runtime, not
+merely declared: exceeding them raises `BudgetExceededError` and terminates the
+run rather than retrying.
+
+Multi-provider routing, parallel sub-agents, merge control, and long-term memory
+are planned for later milestones.
 
 ### Verification architecture
 
@@ -23,6 +33,25 @@ judge response blocks (fails closed), and any failed automated gate blocks.
 This separation (deterministic script owns the verdict, LLMs only supply
 evidence) follows the pattern used by
 [kimi-atlas](https://github.com/null0xxx/kimi-atlas)'s verification harness.
+
+### Runtime control
+
+Task analysis is separated from execution. `orchestrator/task_analyzer.py`
+classifies the request; `orchestrator/execution_plan.py` produces a validated
+plan (steps, dependencies, token/spend/agent limits); `orchestrator/manager.py`
+executes it. Agents never talk to each other directly — all coordination goes
+through the orchestrator.
+
+Cost is tracked in `Decimal` (never float) against a dated price table, and
+fails closed on an unknown model rather than silently costing nothing. Per-call
+metrics — model, input/output/cache tokens, latency, spend, status — are written
+to SQLite after every call, including failures.
+
+Three architecture tests enforce the invariants that make the above true:
+provider SDKs may only be imported inside `runtime/` and `providers/`; only
+`runtime/gateway.py` may reach into `providers/`; and `providers/` may not
+import `runtime/`. These fail with the offending file and the rule it broke,
+so the gateway cannot be quietly bypassed by future code.
 
 ## Setup
 
