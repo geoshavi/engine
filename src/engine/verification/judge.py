@@ -1,5 +1,4 @@
 import json
-import re
 import sqlite3
 from collections.abc import Callable
 
@@ -48,15 +47,55 @@ RESPONSE_INSTRUCTION = (
     "Return {\"defects\": [], \"verdict\": \"OK\"} if you find nothing to flag."
 )
 
-_JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+def _extract_json_objects(text: str) -> list[str]:
+    """Every complete, balanced top-level {...} span in ``text``, in order.
+
+    Tracks brace depth by hand rather than a regex: a naive greedy
+    ``\\{.*\\}`` spans from the first '{' to the LAST '}' in the whole
+    response, which merges multiple objects into one invalid blob if the
+    model second-guesses itself mid-answer (observed in production: a
+    defect, then "Wait, let me reconsider more carefully" and a corrected
+    verdict, as two separate complete JSON objects). Depth tracking finds
+    each object's true boundary instead. String contents are skipped
+    (honoring \\" escapes) so a brace quoted inside a "fix"/"location" value
+    -- e.g. a defect describing a literal dict in the reviewed code -- can't
+    be mistaken for a new top-level object.
+    """
+    objects: list[str] = []
+    depth = 0
+    start: int | None = None
+    in_string = False
+    escaped = False
+    for i, ch in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start is not None:
+                objects.append(text[start : i + 1])
+                start = None
+    return objects
 
 
 def _parse_critic(response_text: str) -> tuple[dict, list[str]]:
-    match = _JSON_OBJECT_RE.search(response_text)
-    if not match:
+    objects = _extract_json_objects(response_text)
+    if not objects:
         return {}, ["response did not contain a JSON object"]
     try:
-        parsed = json.loads(match.group(0))
+        parsed = json.loads(objects[-1])  # the model's final answer, not an earlier draft
     except json.JSONDecodeError as exc:
         return {}, [f"response was not valid JSON: {exc}"]
     errors = enforce_critic_schema(parsed)

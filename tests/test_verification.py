@@ -8,7 +8,7 @@ from engine.runtime.gateway import LLMGateway
 from engine.state.models import VerificationResult
 from engine.verification import pipeline, verdict
 from engine.verification.automated import automated_defects, run_automated_gates
-from engine.verification.judge import _parse_critic, run_judge_gates
+from engine.verification.judge import _extract_json_objects, _parse_critic, run_judge_gates
 from engine.verification.schema import enforce_critic_schema
 
 
@@ -102,6 +102,95 @@ def test_parse_critic_rejects_non_json_text() -> None:
     critic, errors = _parse_critic("looks fine to me, no issues")
     assert critic == {}
     assert errors
+
+
+def test_extract_json_objects_finds_each_balanced_span_separately() -> None:
+    text = '{"a": 1} noise {"b": 2}'
+    assert _extract_json_objects(text) == ['{"a": 1}', '{"b": 2}']
+
+
+def test_parse_critic_takes_the_last_of_two_complete_json_objects() -> None:
+    """Mirrors an observed production failure: the model drafts a defect,
+    second-guesses itself mid-response ("Wait, let me reconsider more
+    carefully"), and emits a second, corrected JSON object. The old greedy
+    \\{.*\\} regex spanned first-brace-to-last-brace across both into one
+    invalid blob; the fix must recover the model's final answer, not its
+    discarded draft.
+    """
+    draft = json.dumps(
+        {
+            "defects": [
+                {"id": "C1", "category": "CORRECTNESS", "severity": "HIGH", "location": "x", "fix": "y"}
+            ],
+            "verdict": "FAIL",
+        }
+    )
+    final = _ok_critic_json()
+    response_text = f"{draft}\n\nWait, let me reconsider more carefully:\n\n{final}"
+
+    critic, errors = _parse_critic(response_text)
+
+    assert errors == []
+    assert critic == json.loads(final)
+    assert critic["defects"] == []
+
+
+def test_parse_critic_ignores_braces_inside_quoted_strings() -> None:
+    """A "fix" value describing a literal dict in the reviewed code (e.g.
+    {"name": "New User"}) must stay inside its own string span, not be
+    mistaken for the start of a second top-level object.
+    """
+    response_text = json.dumps(
+        {
+            "defects": [
+                {
+                    "id": "C1",
+                    "category": "CODE-QUALITY",
+                    "severity": "MEDIUM",
+                    "location": "solution.py:4",
+                    "fix": 'extract {"name": "New User"} to a named constant',
+                }
+            ],
+            "verdict": "OK",
+        }
+    )
+
+    critic, errors = _parse_critic(response_text)
+
+    assert errors == []
+    assert critic["defects"][0]["fix"] == 'extract {"name": "New User"} to a named constant'
+
+
+def test_parse_critic_rejects_truncated_json_with_unclosed_brace() -> None:
+    truncated = '{"defects": [], "verdict": "OK"'  # missing closing brace
+
+    critic, errors = _parse_critic(truncated)
+
+    assert critic == {}
+    assert errors == ["response did not contain a JSON object"]
+
+
+def test_parse_critic_still_rejects_out_of_enum_category_unchanged_by_this_fix() -> None:
+    """The parser fix only changes JSON *extraction* -- schema validation
+    (enforce_critic_schema) is untouched. A well-formed JSON object with a
+    category outside the fixed enum (observed in production: a security
+    lens labeling a sort-order bug "LOGIC" instead of "SECURITY") must still
+    fail closed exactly as before -- a separate, deliberately out-of-scope
+    problem for this commit.
+    """
+    response_text = json.dumps(
+        {
+            "defects": [
+                {"id": "C1", "category": "LOGIC", "severity": "LOW", "location": "x", "fix": "y"}
+            ],
+            "verdict": "OK",
+        }
+    )
+
+    critic, errors = _parse_critic(response_text)
+
+    assert critic == {}
+    assert any("category" in e for e in errors)
 
 
 def test_run_judge_gates_returns_one_critic_per_lens() -> None:
