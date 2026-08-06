@@ -19,9 +19,11 @@ LENSES = {
         "correctness and style — those are reviewed separately."
     ),
     "code-quality": (
-        "You are a strict, adversarial code reviewer focused ONLY on code quality: naming, "
-        "structure, unnecessary complexity, dead code. Ignore correctness and security — "
-        "those are reviewed separately."
+        "You are a strict, adversarial code reviewer focused ONLY on code quality: naming "
+        "(including function/method names that misrepresent what the code actually does), "
+        "magic numbers or hardcoded literals that should be named constants, structure, "
+        "unnecessary complexity, dead code. Ignore correctness and security — those are "
+        "reviewed separately."
     ),
 }
 
