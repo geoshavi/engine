@@ -152,6 +152,142 @@ def test_run_judge_gates_tags_each_defect_with_the_lens_that_produced_it() -> No
     assert lenses_seen == {"correctness", "security", "code-quality"}
 
 
+class _SequencedFakeProvider:
+    """Returns responses in call order rather than keying off the lens's
+    system prompt text -- lets a test target exactly one lens via LENSES'
+    stable dict iteration order (correctness, security, code-quality)
+    without coupling to lens prompt wording.
+    """
+
+    name = "fake"
+
+    def __init__(self, responses: list[str]) -> None:
+        self._responses = list(responses)
+        self._calls = 0
+
+    def generate(
+        self,
+        messages: list[Message],
+        model: str,
+        system: str | None = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.0,
+        timeout_seconds: float | None = None,
+    ) -> GenerationResult:
+        text = self._responses[self._calls]
+        self._calls += 1
+        return GenerationResult(
+            text=text, model=model, provider=self.name, input_tokens=1, output_tokens=1
+        )
+
+
+def test_run_judge_gates_invokes_on_schema_failure_only_for_the_failing_lens() -> None:
+    responses = [_ok_critic_json(), "not json at all", _ok_critic_json()]
+    gateway = LLMGateway(_SequencedFakeProvider(responses))
+    captured: list[tuple[str, str, list[str]]] = []
+
+    critics, schema_errors = run_judge_gates(
+        gateway,
+        _budget(),
+        "claude-haiku-4-5-20251001",
+        "do the thing",
+        "print('hi')",
+        run_id=1,
+        task_id="task-1",
+        conn=None,
+        on_schema_failure=lambda lens, text, errs: captured.append((lens, text, errs)),
+    )
+
+    assert len(critics) == 2  # only the 2 well-formed lenses
+    assert len(captured) == 1
+    lens, raw_response, errors = captured[0]
+    assert lens == "security"
+    assert raw_response == "not json at all"
+    assert errors
+    assert any(e.startswith("judge:security:") for e in schema_errors)
+
+
+def test_run_judge_gates_on_schema_failure_gets_empty_string_not_none_for_empty_response() -> None:
+    responses = [_ok_critic_json(), _ok_critic_json(), ""]
+    gateway = LLMGateway(_SequencedFakeProvider(responses))
+    captured: list[tuple[str, str, list[str]]] = []
+
+    run_judge_gates(
+        gateway,
+        _budget(),
+        "claude-haiku-4-5-20251001",
+        "do the thing",
+        "print('hi')",
+        run_id=1,
+        task_id="task-1",
+        conn=None,
+        on_schema_failure=lambda lens, text, errs: captured.append((lens, text, errs)),
+    )
+
+    assert len(captured) == 1
+    lens, raw_response, _errors = captured[0]
+    assert lens == "code-quality"
+    assert raw_response == ""
+    assert raw_response is not None
+
+
+def test_run_judge_gates_without_callback_behaves_exactly_as_before() -> None:
+    """on_schema_failure defaults to None -- every existing caller (api.py,
+    orchestrator/engine.py) omits it, so this proves the default path is
+    unaffected: no crash, same return shape, schema failures still recorded
+    in schema_errors (just not individually diagnosed).
+    """
+    responses = [_ok_critic_json(), "not json at all", _ok_critic_json()]
+    gateway = LLMGateway(_SequencedFakeProvider(responses))
+
+    critics, schema_errors = run_judge_gates(
+        gateway,
+        _budget(),
+        "claude-haiku-4-5-20251001",
+        "do the thing",
+        "print('hi')",
+        run_id=1,
+        task_id="task-1",
+        conn=None,
+    )
+
+    assert len(critics) == 2
+    assert any(e.startswith("judge:security:") for e in schema_errors)
+
+
+def test_pipeline_run_verification_forwards_on_schema_failure_unchanged(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        pipeline, "run_automated_gates", lambda workspace: [VerificationResult("ruff", True, "ok")]
+    )
+    monkeypatch.setattr(pipeline, "automated_defects", lambda results: [])
+    received = {}
+
+    def fake_run_judge_gates(gateway, budget, model, task, code, **kwargs):
+        received["on_schema_failure"] = kwargs.get("on_schema_failure")
+        return [], []
+
+    monkeypatch.setattr(pipeline, "run_judge_gates", fake_run_judge_gates)
+
+    def sentinel(lens: str, text: str, errors: list[str]) -> None:
+        return None
+
+    pipeline.run_verification(
+        tmp_path,
+        _gateway(""),
+        _budget(),
+        "fake-model",
+        "task",
+        run_id=1,
+        task_id="task-1",
+        conn=None,
+        on_schema_failure=sentinel,
+    )
+
+    assert received["on_schema_failure"] is sentinel
+
+
 def test_verdict_merge_fails_when_any_blocking_defect_present() -> None:
     critics = [
         {"defects": [], "verdict": "OK"},

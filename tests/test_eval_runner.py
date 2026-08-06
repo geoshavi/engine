@@ -3,6 +3,7 @@ agent_execution_metrics rows, per-category accuracy, empty-benchmark
 handling, and error isolation (one failing case must never abort the rest).
 """
 
+import json
 from decimal import Decimal
 from pathlib import Path
 
@@ -14,7 +15,12 @@ from engine.providers.base import GenerationResult
 from engine.runtime.budget import BudgetController
 from engine.runtime.gateway import LLMGateway
 from engine.state import db
-from engine.state.models import AgentExecutionMetric, EvalCaseResult, VerificationResult
+from engine.state.models import (
+    AgentExecutionMetric,
+    EvalCaseResult,
+    EvalCaseSchemaFailure,
+    VerificationResult,
+)
 
 
 class _FakeProvider:
@@ -571,4 +577,177 @@ def test_record_eval_case_defects_falls_back_to_automated_for_script_defects(tmp
 
         stored = db.get_eval_case_defects(conn, eval_case_result_id)
 
-    assert stored[0]["lens"] == "automated"
+        assert stored[0]["lens"] == "automated"
+
+
+# ------------------------------------------------------- schema diagnostics
+
+
+class _SequencedFakeProvider:
+    """Returns responses in call order -- lets a test target exactly one
+    lens via LENSES' stable iteration order (correctness, security,
+    code-quality) without going through a mocked run_verification, so the
+    real judge.py -> pipeline.py -> runner.py wiring is what's under test.
+    """
+
+    name = "fake"
+
+    def __init__(self, responses: list[str]) -> None:
+        self._responses = list(responses)
+        self._calls = 0
+
+    def generate(self, messages, model, system=None, max_tokens=4096, temperature=0.0, timeout_seconds=None):
+        text = self._responses[self._calls]
+        self._calls += 1
+        return GenerationResult(
+            text=text, model=model, provider=self.name, input_tokens=1, output_tokens=1
+        )
+
+
+class _FailingSequencedFakeProvider:
+    """Like _SequencedFakeProvider, but an item may be an Exception instance
+    to raise instead of a response -- simulates a later lens's call itself
+    failing (network/provider error), distinct from a call that succeeds
+    with unparseable content.
+    """
+
+    name = "fake"
+
+    def __init__(self, items: list) -> None:
+        self._items = list(items)
+        self._calls = 0
+
+    def generate(self, messages, model, system=None, max_tokens=4096, temperature=0.0, timeout_seconds=None):
+        item = self._items[self._calls]
+        self._calls += 1
+        if isinstance(item, Exception):
+            raise item
+        return GenerationResult(
+            text=item, model=model, provider=self.name, input_tokens=1, output_tokens=1
+        )
+
+
+def test_run_case_persists_schema_failures_through_the_real_judge_path(tmp_path: Path) -> None:
+    """No monkeypatching of run_verification here -- exercises the real
+    judge.py -> pipeline.py -> runner.py callback wiring end to end. Only
+    the security lens (2nd in LENSES' iteration order) gets a malformed
+    response.
+    """
+    ok = json.dumps({"defects": [], "verdict": "OK"})
+    gateway = LLMGateway(_SequencedFakeProvider([ok, "not json at all", ok]))
+
+    with db.connect(tmp_path / "state.db") as conn:
+        run_id = db.create_run(conn, "eval", "anthropic", "m")
+        result = run_case(
+            _case(),
+            gateway=gateway,
+            budget=_budget(),
+            judge_model="claude-haiku-4-5-20251001",
+            conn=conn,
+            run_id=run_id,
+            eval_run_id=1,
+        )
+
+    assert result.actual_verdict == "UNVERIFIED"  # fails closed -- unaffected by this change
+    assert len(result.schema_failures) == 1
+    failure = result.schema_failures[0]
+    assert failure.lens == "security"
+    assert failure.raw_response == "not json at all"
+    assert failure.error_detail
+
+    by_lens = {lr.lens: lr for lr in result.lens_results}
+    assert by_lens["security"].call_status == "ok"  # the API call succeeded
+    assert by_lens["security"].schema_valid is False  # the content didn't parse
+    assert by_lens["security"].error is None  # not overloaded with the parse error
+    assert by_lens["correctness"].schema_valid is True
+    assert by_lens["code-quality"].schema_valid is True
+
+
+def test_run_case_schema_failures_survive_a_later_lens_exception(tmp_path: Path) -> None:
+    """The callback fires as a side effect inside run_judge_gates' loop, not
+    via its return value -- so a failure captured from an earlier lens
+    (correctness) survives even though a later lens's exception (security)
+    aborts run_judge_gates before it can return anything. merged/defects are
+    still lost to that same, pre-existing gap -- this only changes what
+    happens to already-captured schema-failure diagnostics.
+    """
+    gateway = LLMGateway(
+        _FailingSequencedFakeProvider(["not json at all", RuntimeError("boom on security lens")])
+    )
+
+    with db.connect(tmp_path / "state.db") as conn:
+        run_id = db.create_run(conn, "eval", "anthropic", "m")
+        result = run_case(
+            _case(eval_case_id="partial-schema"),
+            gateway=gateway,
+            budget=_budget(),
+            judge_model="claude-haiku-4-5-20251001",
+            conn=conn,
+            run_id=run_id,
+            eval_run_id=1,
+        )
+
+    assert result.error is not None and "boom on security lens" in result.error
+    assert result.defects == []  # the known, pre-existing gap -- unaffected by this change
+    assert len(result.schema_failures) == 1
+    assert result.schema_failures[0].lens == "correctness"
+    assert result.schema_failures[0].raw_response == "not json at all"
+
+
+def test_eval_case_schema_failures_persist_with_correct_fk(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    with db.connect(config.db_path) as conn:
+        run_id = db.create_run(conn, "eval", "anthropic", "m")
+        eval_run_id = db.create_eval_run(conn, "sha", "bench", "v1", "v1")
+        conn.commit()
+
+        eval_case_result_id = db.record_eval_case_result(
+            conn,
+            EvalCaseResult(
+                eval_run_id=eval_run_id,
+                eval_case_id="x",
+                task_id=f"eval-{run_id}-x",
+                expected_verdict="UNVERIFIED",
+                actual_verdict="UNVERIFIED",
+                expected_defect_category=None,
+                detected_defect_categories=[],
+                latency_ms=0,
+                cost=Decimal(0),
+                passed=True,
+            ),
+        )
+        db.record_eval_case_schema_failures(
+            conn,
+            eval_case_result_id,
+            [EvalCaseSchemaFailure(lens="code-quality", error_detail="bad json", raw_response="")],
+        )
+        conn.commit()
+
+        # A second, unrelated case-result row to prove lookups are FK-scoped.
+        other_id = db.record_eval_case_result(
+            conn,
+            EvalCaseResult(
+                eval_run_id=eval_run_id,
+                eval_case_id="other",
+                task_id="t-other",
+                expected_verdict="OK",
+                actual_verdict="OK",
+                expected_defect_category=None,
+                detected_defect_categories=[],
+                latency_ms=0,
+                cost=Decimal(0),
+                passed=True,
+            ),
+        )
+        db.record_eval_case_schema_failures(conn, other_id, [])
+        conn.commit()
+
+        stored = db.get_eval_case_schema_failures(conn, eval_case_result_id)
+        other_stored = db.get_eval_case_schema_failures(conn, other_id)
+
+    assert len(stored) == 1
+    assert stored[0].lens == "code-quality"
+    assert stored[0].error_detail == "bad json"
+    # Empty raw_response persists as "" -- not skipped, no NOT NULL failure.
+    assert stored[0].raw_response == ""
+    assert other_stored == []

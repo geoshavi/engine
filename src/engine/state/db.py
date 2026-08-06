@@ -10,6 +10,7 @@ from engine.state.models import (
     AgentExecutionRecord,
     EvalCaseLensResult,
     EvalCaseResult,
+    EvalCaseSchemaFailure,
     EvalRun,
     RunRecord,
     VerificationResult,
@@ -159,6 +160,26 @@ CREATE TABLE IF NOT EXISTS eval_case_automated_gates (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_eval_case_automated_gates_result ON eval_case_automated_gates(eval_case_result_id);
+
+-- Eval-only schema-failure diagnostics (Phase 2.1 follow-up): one row per
+-- judge lens call whose response failed to parse/validate (schema_valid=0
+-- in eval_case_lens_results above). Populated by eval/runner.py only --
+-- never by gateway.py or the production engine run/engine serve paths.
+-- Deliberately separate from eval_case_lens_results.error, which stays
+-- reserved for transport/provider failures (call_status='error'); this
+-- table only ever holds calls that succeeded but produced unparseable
+-- content. raw_response is NOT NULL -- judge.py normalizes response.text
+-- to "" before this is ever written, so an empty completion still gets a
+-- row instead of being silently skipped.
+CREATE TABLE IF NOT EXISTS eval_case_schema_failures (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    eval_case_result_id INTEGER NOT NULL REFERENCES eval_case_results(id),
+    lens TEXT NOT NULL,
+    error_detail TEXT NOT NULL,
+    raw_response TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_eval_case_schema_failures_result ON eval_case_schema_failures(eval_case_result_id);
 """
 
 
@@ -565,3 +586,35 @@ def get_eval_case_automated_gates(
         (eval_case_result_id,),
     ).fetchall()
     return [VerificationResult(gate_name=row[0], passed=bool(row[1]), detail=row[2]) for row in rows]
+
+
+def record_eval_case_schema_failures(
+    conn: sqlite3.Connection, eval_case_result_id: int, failures: list[EvalCaseSchemaFailure]
+) -> None:
+    """``raw_response`` is coerced with ``or ""`` as a last-mile guard --
+    belt-and-suspenders alongside judge.py's own normalization -- so a
+    None/empty response can never violate the NOT NULL column or cause the
+    diagnostic row to be silently dropped.
+    """
+    conn.executemany(
+        "INSERT INTO eval_case_schema_failures "
+        "(eval_case_result_id, lens, error_detail, raw_response) "
+        "VALUES (?, ?, ?, ?)",
+        [
+            (eval_case_result_id, f.lens, f.error_detail or "", f.raw_response or "")
+            for f in failures
+        ],
+    )
+
+
+def get_eval_case_schema_failures(
+    conn: sqlite3.Connection, eval_case_result_id: int
+) -> list[EvalCaseSchemaFailure]:
+    rows = conn.execute(
+        "SELECT lens, error_detail, raw_response FROM eval_case_schema_failures "
+        "WHERE eval_case_result_id = ? ORDER BY id",
+        (eval_case_result_id,),
+    ).fetchall()
+    return [
+        EvalCaseSchemaFailure(lens=row[0], error_detail=row[1], raw_response=row[2]) for row in rows
+    ]

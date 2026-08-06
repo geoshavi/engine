@@ -119,6 +119,25 @@ class EvalCaseLensResult:
 
 
 @dataclass
+class EvalCaseSchemaFailure:
+    """One row per judge lens call whose response failed to parse/validate
+    (schema_valid=False on EvalCaseLensResult) -- eval-only diagnostics
+    (Phase 2.1 follow-up), populated by eval/runner.py alone. Deliberately
+    separate from EvalCaseLensResult.error, which is reserved for transport/
+    provider failures (call_status="error"); this table only ever exists for
+    calls that succeeded but produced unparseable content.
+
+    ``raw_response`` is never None: judge.py normalizes response.text (typed
+    str, but defended anyway) to "" before invoking the diagnostics hook, so
+    an empty completion still produces a row instead of being skipped.
+    """
+
+    lens: str  # "correctness" | "security" | "code-quality"
+    error_detail: str  # _parse_critic's error message(s), newline-joined
+    raw_response: str
+
+
+@dataclass
 class EvalCaseResult:
     """One row per evaluated case. ``task_id`` is the exact value passed to
     run_verification() for this case, so agent_execution_metrics rows for
@@ -128,13 +147,14 @@ class EvalCaseResult:
     that sum may reflect only the lenses that completed before the failure,
     not a full 3-lens measurement.
 
-    ``defects``/``lens_results``/``automated_gate_results`` (Phase 2.1) are
-    NOT columns of eval_case_results itself -- they're carried on this
-    dataclass purely so run_benchmark() can hand them to the
-    eval_case_defects/eval_case_lens_results/eval_case_automated_gates
-    writers once record_eval_case_result() has produced the FK id. Reading
-    a row back via get_eval_case_results() always yields these as empty
-    lists; use the dedicated getters for the child tables instead.
+    ``defects``/``lens_results``/``automated_gate_results``/``schema_failures``
+    (Phase 2.1) are NOT columns of eval_case_results itself -- they're
+    carried on this dataclass purely so run_benchmark() can hand them to the
+    eval_case_defects/eval_case_lens_results/eval_case_automated_gates/
+    eval_case_schema_failures writers once record_eval_case_result() has
+    produced the FK id. Reading a row back via get_eval_case_results() always
+    yields these as empty lists; use the dedicated getters for the child
+    tables instead.
     """
 
     eval_run_id: int
@@ -151,3 +171,4 @@ class EvalCaseResult:
     defects: list[dict] = field(default_factory=list)
     lens_results: list[EvalCaseLensResult] = field(default_factory=list)
     automated_gate_results: list[VerificationResult] = field(default_factory=list)
+    schema_failures: list[EvalCaseSchemaFailure] = field(default_factory=list)

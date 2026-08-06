@@ -1,4 +1,5 @@
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 from engine.runtime.budget import BudgetController
@@ -27,12 +28,18 @@ def run_verification(
     task_id: str,
     conn: sqlite3.Connection | None,
     timeout_seconds: float | None = None,
+    on_schema_failure: Callable[[str, str, list[str]], None] | None = None,
 ) -> tuple[str, dict, list[VerificationResult]]:
     """Run the automated + LLM-judge lenses and return the deterministic verdict.
 
     The LLM judges only ever produce structured defects; ``verdict.gate`` (pure
     Python, no model call) is the sole function allowed to decide pass/fail.
     Returns (status, merged_critic, automated_results).
+
+    ``on_schema_failure`` is an optional diagnostics hook (lens_name,
+    raw_response, errors) -> None, forwarded to run_judge_gates unchanged.
+    None by default -- production callers (api.py, orchestrator/engine.py)
+    never pass it, so their behavior is unaffected; only eval/runner.py does.
     """
     automated_results = run_automated_gates(workspace)
     automated_passed = all(r.passed for r in automated_results)
@@ -49,6 +56,7 @@ def run_verification(
         task_id=task_id,
         conn=conn,
         timeout_seconds=timeout_seconds,
+        on_schema_failure=on_schema_failure,
     )
 
     merged = verdict.merge(critic_outputs, script_defects)

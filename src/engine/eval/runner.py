@@ -39,6 +39,7 @@ from engine.state.models import (
     AgentExecutionMetric,
     EvalCaseLensResult,
     EvalCaseResult,
+    EvalCaseSchemaFailure,
     EvalRun,
     VerificationResult,
 )
@@ -189,6 +190,19 @@ def run_case(
     # past the point where any of these were ever assigned).
     merged: dict | None = None
     automated_results: list[VerificationResult] = []
+    # Populated via callback as each lens fails, not from run_verification()'s
+    # return value -- so unlike `merged`/detected_categories above, a LATER
+    # lens's exception does not discard failures already captured from
+    # earlier lenses in the same case.
+    schema_failures: list[EvalCaseSchemaFailure] = []
+
+    def _collect_schema_failure(lens_name: str, raw_response: str, errors: list[str]) -> None:
+        schema_failures.append(
+            EvalCaseSchemaFailure(
+                lens=lens_name, error_detail="\n".join(errors), raw_response=raw_response or ""
+            )
+        )
+
     try:
         _write_case_files(workspace, case.files)
         status, merged, automated_results = run_verification(
@@ -201,6 +215,7 @@ def run_case(
             task_id=task_id,
             conn=conn,
             timeout_seconds=timeout_seconds,
+            on_schema_failure=_collect_schema_failure,
         )
         actual_verdict = status
         detected_categories = sorted(
@@ -235,6 +250,7 @@ def run_case(
         defects=merged.get("defects", []) if merged is not None else [],
         lens_results=_build_lens_results(metrics, merged),
         automated_gate_results=automated_results,
+        schema_failures=schema_failures,
     )
 
 
@@ -314,6 +330,7 @@ def run_benchmark(
             db.record_eval_case_defects(conn, eval_case_result_id, result.defects)
             db.record_eval_case_lens_results(conn, eval_case_result_id, result.lens_results)
             db.record_eval_case_automated_gates(conn, eval_case_result_id, result.automated_gate_results)
+            db.record_eval_case_schema_failures(conn, eval_case_result_id, result.schema_failures)
             conn.commit()
             results.append(result)
 

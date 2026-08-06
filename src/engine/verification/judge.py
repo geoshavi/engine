@@ -1,6 +1,7 @@
 import json
 import re
 import sqlite3
+from collections.abc import Callable
 
 from engine.providers.base import Message
 from engine.runtime.budget import BudgetController
@@ -75,6 +76,7 @@ def run_judge_gates(
     task_id: str,
     conn: sqlite3.Connection | None,
     timeout_seconds: float | None = None,
+    on_schema_failure: Callable[[str, str, list[str]], None] | None = None,
 ) -> tuple[list[dict], list[str]]:
     critics: list[dict] = []
     schema_errors: list[str] = []
@@ -114,6 +116,10 @@ def run_judge_gates(
         critic, errors = _parse_critic(response.text)
         if errors:
             schema_errors.extend(f"judge:{lens_name}: {e}" for e in errors)
+            if on_schema_failure is not None:
+                # response.text is typed str, but normalize defensively --
+                # callers persist this raw text and must never see None.
+                on_schema_failure(lens_name, response.text or "", errors)
         else:
             # Tag by the lens that actually produced this defect, not by
             # its self-reported "category" -- the two are expected to
