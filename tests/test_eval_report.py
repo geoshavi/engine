@@ -3,6 +3,7 @@ benchmark_version mismatch detection, and --compare diffing.
 """
 
 from decimal import Decimal
+from typing import Any
 
 from engine.eval.dataset import BENCHMARK_VERSION, CASES, DATASET_VERSION, EvalCase
 from engine.eval.report import detect_version_mismatch, format_comparison, format_dry_run_plan
@@ -33,8 +34,13 @@ def _eval_run(**overrides) -> EvalRun:
     return EvalRun(**defaults)
 
 
-def _result(**overrides) -> EvalCaseResult:
-    defaults = {
+def _result(**overrides: Any) -> EvalCaseResult:
+    # Explicitly dict[str, Any] (not the inferred dict[str, object] every
+    # other **overrides helper in this test suite uses) -- EvalCaseResult
+    # is the one dataclass in this file that Phase 2.1 added fields to, and
+    # object-typed unpacking makes mypy flag EVERY constructor parameter
+    # (including ones this dict never sets) each time the dataclass grows.
+    defaults: dict[str, Any] = {
         "eval_run_id": 1,
         "eval_case_id": "c1",
         "task_id": "t1",

@@ -76,6 +76,17 @@ def run_judge_gates(
         f"Resulting code (all files concatenated):\n{code_snapshot}"
     )
     for lens_name, lens_system in LENSES.items():
+        # Phase 2.1 scope note (deliberately NOT changed here): if this call
+        # raises -- budget exceeded, network error, provider error -- the
+        # exception propagates straight out of run_judge_gates, and any
+        # critics already collected from earlier lenses in this loop are
+        # discarded along with it; the caller never sees them. That's
+        # intentional/out of scope for Phase 2.1, which only adds
+        # observability for the success path -- it does not change judge
+        # behavior. Per-lens fault isolation (catch here, return partial
+        # critics plus a per-lens error marker instead of raising) is
+        # future work: it would change what gate() sees when a lens fails,
+        # which is a verdict-semantics decision, not an observability one.
         response = gateway.generate(
             budget=budget,
             messages=[
@@ -97,5 +108,13 @@ def run_judge_gates(
         if errors:
             schema_errors.extend(f"judge:{lens_name}: {e}" for e in errors)
         else:
+            # Tag by the lens that actually produced this defect, not by
+            # its self-reported "category" -- the two are expected to
+            # agree (each lens's prompt fixes its category string) but
+            # nothing enforces that a defect's category matches the lens
+            # that emitted it, and eval/'s observability tables need the
+            # ground truth of which lens ran, not the model's claim.
+            for defect in critic.get("defects", []):
+                defect["lens"] = lens_name
             critics.append(critic)
     return critics, schema_errors

@@ -119,6 +119,39 @@ def test_run_judge_gates_returns_one_critic_per_lens() -> None:
     assert len(critics) == 3
 
 
+def test_run_judge_gates_tags_each_defect_with_the_lens_that_produced_it() -> None:
+    """Every lens call in this test gets the identical canned response (the
+    fake provider ignores which lens/system prompt it was called with), and
+    that response's defect always claims category "SECURITY" regardless of
+    which lens is calling. If tagging fell back to trusting the model's own
+    "category" field instead of the lens that actually made the call, every
+    tagged defect here would incorrectly read "security" -- proving the tag
+    must come from run_judge_gates' own loop variable, not from the parsed
+    JSON.
+    """
+    response_text = json.dumps(
+        {
+            "defects": [
+                {"id": "X1", "category": "SECURITY", "severity": "LOW", "location": "x", "fix": "y"}
+            ],
+            "verdict": "OK",
+        }
+    )
+    critics, schema_errors = run_judge_gates(
+        _gateway(response_text),
+        _budget(),
+        "claude-haiku-4-5-20251001",
+        "do the thing",
+        "print('hi')",
+        run_id=1,
+        task_id="task-1",
+        conn=None,
+    )
+    assert schema_errors == []
+    lenses_seen = {d["lens"] for critic in critics for d in critic["defects"]}
+    assert lenses_seen == {"correctness", "security", "code-quality"}
+
+
 def test_verdict_merge_fails_when_any_blocking_defect_present() -> None:
     critics = [
         {"defects": [], "verdict": "OK"},

@@ -33,3 +33,14 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.mypy]
+# Scope is src/ only, matching every prior phase's reported baseline (46
+# source files, clean as of Phase 2.1). tests/ is intentionally excluded:
+# several test-fixture helpers build dataclass kwargs via untyped **dict
+# unpacking, which mypy can't verify precisely (dict[str, object] against
+# heterogeneous constructor parameter types) -- 29 pre-existing errors of
+# this shape as of Phase 2.1, tracked but deliberately not in scope to fix
+# wholesale. Running bare `mypy` (no args) from the repo root reproduces
+# this exact scope; that's the number every future phase should report.
+files = ["src"]

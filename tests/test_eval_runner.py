@@ -14,7 +14,7 @@ from engine.providers.base import GenerationResult
 from engine.runtime.budget import BudgetController
 from engine.runtime.gateway import LLMGateway
 from engine.state import db
-from engine.state.models import AgentExecutionMetric, EvalCaseResult
+from engine.state.models import AgentExecutionMetric, EvalCaseResult, VerificationResult
 
 
 class _FakeProvider:
@@ -271,3 +271,304 @@ def test_run_benchmark_persists_and_reads_back_via_get_eval_run(monkeypatch, tmp
     assert reloaded.total_cases == 10
     assert len(reloaded_results) == 10
     assert {r.eval_case_id for r in reloaded_results} == {r.eval_case_id for r in results}
+
+
+# ---------------------------------------------------------------- Phase 2.1
+
+
+def test_run_case_records_a_lens_result_row_for_a_lens_that_found_nothing(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A lens that ran and found zero defects must still produce a row --
+    empty is data, not absence of data. Only the security lens here reports
+    a defect; correctness and code-quality must still show call_status='ok'
+    with defect_count=0, not be silently missing.
+    """
+
+    def fake_run_verification(workspace, gateway, budget, judge_model, task_text, **kwargs):
+        conn, run_id, task_id = kwargs["conn"], kwargs["run_id"], kwargs["task_id"]
+        for lens in ("correctness", "security", "code-quality"):
+            _write_metric(conn, run_id, task_id, agent_name=f"judge:{lens}", cost=Decimal("0.001"), latency_ms=100)
+        merged = {
+            "defects": [
+                {
+                    "id": "S1",
+                    "category": "SECURITY",
+                    "severity": "LOW",
+                    "location": "x",
+                    "fix": "y",
+                    "lens": "security",
+                }
+            ],
+            "verdict": "OK",
+        }
+        return "OK", merged, []
+
+    monkeypatch.setattr(runner_module, "run_verification", fake_run_verification)
+
+    with db.connect(tmp_path / "state.db") as conn:
+        run_id = db.create_run(conn, "eval", "anthropic", "m")
+        result = run_case(
+            _case(), gateway=_gateway(), budget=_budget(), judge_model="m", conn=conn, run_id=run_id, eval_run_id=1
+        )
+
+    assert result.defects == [
+        {"id": "S1", "category": "SECURITY", "severity": "LOW", "location": "x", "fix": "y", "lens": "security"}
+    ]
+    by_lens = {lr.lens: lr for lr in result.lens_results}
+    assert set(by_lens) == {"correctness", "security", "code-quality"}
+    assert by_lens["security"].call_status == "ok"
+    assert by_lens["security"].defect_count == 1
+    assert by_lens["security"].schema_valid is True
+    assert by_lens["correctness"].call_status == "ok"
+    assert by_lens["correctness"].defect_count == 0  # ran, found nothing -- not missing
+    assert by_lens["code-quality"].defect_count == 0
+
+
+def test_run_case_error_preserves_completed_lens_status_but_not_unknown_defect_content(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Mirrors the existing partial-cost behavior (Requirement 7) at the
+    defect layer: two lenses complete before a third raises. Their
+    call_status must still read 'ok' (we know they succeeded via
+    agent_execution_metrics), but defect_count/schema_valid must be None,
+    not a fabricated 0 -- the parsed critic content itself was discarded
+    when the exception unwound past run_judge_gates (see the limitation
+    documented there). The un-started lens reads 'not_run'.
+    """
+
+    def fake_run_verification(workspace, gateway, budget, judge_model, task_text, **kwargs):
+        conn, run_id, task_id = kwargs["conn"], kwargs["run_id"], kwargs["task_id"]
+        _write_metric(conn, run_id, task_id, agent_name="judge:correctness", cost=Decimal("0.001"), latency_ms=100)
+        _write_metric(conn, run_id, task_id, agent_name="judge:security", cost=Decimal("0.001"), latency_ms=100)
+        raise RuntimeError("boom on code-quality lens")
+
+    monkeypatch.setattr(runner_module, "run_verification", fake_run_verification)
+
+    with db.connect(tmp_path / "state.db") as conn:
+        run_id = db.create_run(conn, "eval", "anthropic", "m")
+        result = run_case(
+            _case(eval_case_id="partial"),
+            gateway=_gateway(),
+            budget=_budget(),
+            judge_model="m",
+            conn=conn,
+            run_id=run_id,
+            eval_run_id=1,
+        )
+
+    assert result.error is not None
+    assert result.defects == []  # merge() never ran -- nothing recoverable here
+    by_lens = {lr.lens: lr for lr in result.lens_results}
+    assert by_lens["correctness"].call_status == "ok"
+    assert by_lens["correctness"].defect_count is None  # unknown, not 0 -- content was lost, not absent
+    assert by_lens["correctness"].schema_valid is None
+    assert by_lens["security"].call_status == "ok"
+    assert by_lens["security"].defect_count is None
+    assert by_lens["code-quality"].call_status == "not_run"
+    assert by_lens["code-quality"].defect_count is None
+
+
+def test_run_case_records_lens_call_error_with_message(monkeypatch, tmp_path: Path) -> None:
+    def fake_run_verification(workspace, gateway, budget, judge_model, task_text, **kwargs):
+        conn, run_id, task_id = kwargs["conn"], kwargs["run_id"], kwargs["task_id"]
+        db.record_agent_execution_metric(
+            conn,
+            AgentExecutionMetric(
+                run_id=run_id,
+                task_id=task_id,
+                agent_name="judge:security",
+                model="m",
+                input_tokens=10,
+                output_tokens=0,
+                cache_read_tokens=0,
+                cache_creation_tokens=0,
+                latency_ms=50,
+                actual_spend=None,
+                status="error",
+                error="BadRequestError: credit balance too low",
+            ),
+        )
+        raise RuntimeError("propagated after the metric was recorded")
+
+    monkeypatch.setattr(runner_module, "run_verification", fake_run_verification)
+
+    with db.connect(tmp_path / "state.db") as conn:
+        run_id = db.create_run(conn, "eval", "anthropic", "m")
+        result = run_case(
+            _case(eval_case_id="errored"),
+            gateway=_gateway(),
+            budget=_budget(),
+            judge_model="m",
+            conn=conn,
+            run_id=run_id,
+            eval_run_id=1,
+        )
+
+    by_lens = {lr.lens: lr for lr in result.lens_results}
+    assert by_lens["security"].call_status == "error"
+    assert by_lens["security"].error is not None and "credit balance too low" in by_lens["security"].error
+    assert by_lens["correctness"].call_status == "not_run"
+
+
+def test_run_case_captures_automated_gate_results(monkeypatch, tmp_path: Path) -> None:
+    def fake_run_verification(workspace, gateway, budget, judge_model, task_text, **kwargs):
+        return (
+            "UNVERIFIED",
+            {"defects": [], "verdict": "OK"},
+            [
+                VerificationResult("ruff", False, "E501 line too long"),
+                VerificationResult("mypy", True, "ok"),
+                VerificationResult("pytest", True, "no test files present"),
+            ],
+        )
+
+    monkeypatch.setattr(runner_module, "run_verification", fake_run_verification)
+
+    with db.connect(tmp_path / "state.db") as conn:
+        run_id = db.create_run(conn, "eval", "anthropic", "m")
+        result = run_case(
+            _case(), gateway=_gateway(), budget=_budget(), judge_model="m", conn=conn, run_id=run_id, eval_run_id=1
+        )
+
+    assert [(r.gate_name, r.passed) for r in result.automated_gate_results] == [
+        ("ruff", False),
+        ("mypy", True),
+        ("pytest", True),
+    ]
+
+
+def test_run_case_automated_gate_results_empty_when_case_errors_before_verification(
+    monkeypatch, tmp_path: Path
+) -> None:
+    def fake_run_verification(workspace, gateway, budget, judge_model, task_text, **kwargs):
+        raise RuntimeError("boom before automated gates ever ran")
+
+    monkeypatch.setattr(runner_module, "run_verification", fake_run_verification)
+
+    with db.connect(tmp_path / "state.db") as conn:
+        run_id = db.create_run(conn, "eval", "anthropic", "m")
+        result = run_case(
+            _case(eval_case_id="early-crash"),
+            gateway=_gateway(),
+            budget=_budget(),
+            judge_model="m",
+            conn=conn,
+            run_id=run_id,
+            eval_run_id=1,
+        )
+
+    assert result.automated_gate_results == []
+
+
+def test_eval_case_defects_and_lens_results_persist_with_correct_fk(monkeypatch, tmp_path: Path) -> None:
+    def fake_run_verification(workspace, gateway, budget, judge_model, task_text, **kwargs):
+        conn, run_id, task_id = kwargs["conn"], kwargs["run_id"], kwargs["task_id"]
+        for lens in ("correctness", "security", "code-quality"):
+            _write_metric(conn, run_id, task_id, agent_name=f"judge:{lens}", cost=Decimal("0.001"), latency_ms=50)
+        merged = {
+            "defects": [
+                {
+                    "id": "C1",
+                    "category": "CORRECTNESS",
+                    "severity": "HIGH",
+                    "location": "a:1",
+                    "fix": "z",
+                    "lens": "correctness",
+                }
+            ],
+            "verdict": "FAIL",
+        }
+        return "UNVERIFIED", merged, [VerificationResult("ruff", True, "ok")]
+
+    monkeypatch.setattr(runner_module, "run_verification", fake_run_verification)
+
+    config = _config(tmp_path)
+    with db.connect(config.db_path) as conn:
+        run_id = db.create_run(conn, "eval", "anthropic", "m")
+        eval_run_id = db.create_eval_run(conn, "sha", "bench", "v1", "v1")
+        conn.commit()
+
+        result = run_case(
+            _case(expected_verdict="UNVERIFIED"),
+            gateway=_gateway(),
+            budget=_budget(),
+            judge_model="m",
+            conn=conn,
+            run_id=run_id,
+            eval_run_id=eval_run_id,
+        )
+        eval_case_result_id = db.record_eval_case_result(conn, result)
+        db.record_eval_case_defects(conn, eval_case_result_id, result.defects)
+        db.record_eval_case_lens_results(conn, eval_case_result_id, result.lens_results)
+        db.record_eval_case_automated_gates(conn, eval_case_result_id, result.automated_gate_results)
+        conn.commit()
+
+        # A second, unrelated case-result row to prove lookups are FK-scoped,
+        # not "everything in the table so far".
+        other_id = db.record_eval_case_result(
+            conn,
+            EvalCaseResult(
+                eval_run_id=eval_run_id,
+                eval_case_id="other",
+                task_id="t-other",
+                expected_verdict="OK",
+                actual_verdict="OK",
+                expected_defect_category=None,
+                detected_defect_categories=[],
+                latency_ms=0,
+                cost=Decimal(0),
+                passed=True,
+            ),
+        )
+        db.record_eval_case_defects(conn, other_id, [])
+        conn.commit()
+
+        stored_defects = db.get_eval_case_defects(conn, eval_case_result_id)
+        stored_lens_results = db.get_eval_case_lens_results(conn, eval_case_result_id)
+        stored_gates = db.get_eval_case_automated_gates(conn, eval_case_result_id)
+        other_defects = db.get_eval_case_defects(conn, other_id)
+
+    assert isinstance(eval_case_result_id, int)
+    assert len(stored_defects) == 1
+    assert stored_defects[0]["lens"] == "correctness"
+    assert stored_defects[0]["category"] == "CORRECTNESS"
+    assert stored_defects[0]["severity"] == "HIGH"
+    assert {lr.lens for lr in stored_lens_results} == {"correctness", "security", "code-quality"}
+    assert [g.gate_name for g in stored_gates] == ["ruff"]
+    assert other_defects == []  # FK-scoped: the other case's rows don't leak in
+
+
+def test_record_eval_case_defects_falls_back_to_automated_for_script_defects(tmp_path: Path) -> None:
+    """automated_defects() (ruff/mypy/pytest failures) never tags a "lens"
+    key -- only judge.py's run_judge_gates does that. The writer must not
+    crash or silently drop these rows; it labels them "automated".
+    """
+    with db.connect(tmp_path / "state.db") as conn:
+        run_id = db.create_run(conn, "eval", "anthropic", "m")
+        eval_run_id = db.create_eval_run(conn, "sha", "bench", "v1", "v1")
+        eval_case_result_id = db.record_eval_case_result(
+            conn,
+            EvalCaseResult(
+                eval_run_id=eval_run_id,
+                eval_case_id="x",
+                task_id=f"eval-{run_id}-x",
+                expected_verdict="UNVERIFIED",
+                actual_verdict="UNVERIFIED",
+                expected_defect_category="CORRECTNESS",
+                detected_defect_categories=["CORRECTNESS"],
+                latency_ms=0,
+                cost=Decimal(0),
+                passed=True,
+            ),
+        )
+        db.record_eval_case_defects(
+            conn,
+            eval_case_result_id,
+            [{"id": "AUTO0-mypy", "category": "CORRECTNESS", "severity": "HIGH", "location": "mypy", "fix": "f"}],
+        )
+        conn.commit()
+
+        stored = db.get_eval_case_defects(conn, eval_case_result_id)
+
+    assert stored[0]["lens"] == "automated"

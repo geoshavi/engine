@@ -96,6 +96,29 @@ class EvalRun:
 
 
 @dataclass
+class EvalCaseLensResult:
+    """One row per judge lens per eval case -- proof a lens ran and found
+    nothing is different from a lens that never got called (Phase 2.1:
+    without this, an empty result and a missing result look identical).
+
+    ``defect_count``/``schema_valid`` are None when unknown rather than a
+    fabricated 0/False: this happens when the lens's own call succeeded
+    (status == "ok" in agent_execution_metrics) but a LATER lens's
+    exception aborted run_judge_gates before merge() ever ran, discarding
+    the already-parsed critic. See the limitation documented in
+    verification/judge.py's run_judge_gates for why that data can't be
+    recovered without changing judge.py's per-lens fault isolation, which
+    is out of scope for Phase 2.1.
+    """
+
+    lens: str  # "correctness" | "security" | "code-quality"
+    call_status: str  # "ok" | "error" | "not_run"
+    defect_count: int | None
+    schema_valid: bool | None
+    error: str | None = None
+
+
+@dataclass
 class EvalCaseResult:
     """One row per evaluated case. ``task_id`` is the exact value passed to
     run_verification() for this case, so agent_execution_metrics rows for
@@ -104,6 +127,14 @@ class EvalCaseResult:
     of whatever metric rows exist for that task_id -- if ``error`` is set,
     that sum may reflect only the lenses that completed before the failure,
     not a full 3-lens measurement.
+
+    ``defects``/``lens_results``/``automated_gate_results`` (Phase 2.1) are
+    NOT columns of eval_case_results itself -- they're carried on this
+    dataclass purely so run_benchmark() can hand them to the
+    eval_case_defects/eval_case_lens_results/eval_case_automated_gates
+    writers once record_eval_case_result() has produced the FK id. Reading
+    a row back via get_eval_case_results() always yields these as empty
+    lists; use the dedicated getters for the child tables instead.
     """
 
     eval_run_id: int
@@ -117,3 +148,6 @@ class EvalCaseResult:
     cost: Decimal
     passed: bool
     error: str | None = None  # set iff run_verification() raised for this case
+    defects: list[dict] = field(default_factory=list)
+    lens_results: list[EvalCaseLensResult] = field(default_factory=list)
+    automated_gate_results: list[VerificationResult] = field(default_factory=list)

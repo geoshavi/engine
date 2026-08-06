@@ -8,6 +8,7 @@ from pathlib import Path
 from engine.state.models import (
     AgentExecutionMetric,
     AgentExecutionRecord,
+    EvalCaseLensResult,
     EvalCaseResult,
     EvalRun,
     RunRecord,
@@ -110,6 +111,54 @@ CREATE TABLE IF NOT EXISTS eval_case_results (
     error TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Phase 2.1: defect-level observability for eval runs. Populated only by
+-- eval/runner.py (never by orchestrator/manager.py -- that's what `defects`
+-- and `verification_results` above are for, keyed by run_id/attempt_number,
+-- a shape that doesn't fit eval cases). See eval_case_id FK, not run_id.
+CREATE TABLE IF NOT EXISTS eval_case_defects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    eval_case_result_id INTEGER NOT NULL REFERENCES eval_case_results(id),
+    lens TEXT NOT NULL,
+    defect_id TEXT NOT NULL,
+    category TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    location TEXT NOT NULL,
+    fix TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_eval_case_defects_result ON eval_case_defects(eval_case_result_id);
+
+-- One row per canonical judge lens per eval case, always -- including
+-- lenses that ran and found zero defects, so "found nothing" and "never
+-- ran" are distinguishable. defect_count/schema_valid are NULL when
+-- unknown rather than a fabricated 0 -- see EvalCaseLensResult's docstring.
+CREATE TABLE IF NOT EXISTS eval_case_lens_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    eval_case_result_id INTEGER NOT NULL REFERENCES eval_case_results(id),
+    lens TEXT NOT NULL,
+    call_status TEXT NOT NULL,
+    defect_count INTEGER,
+    schema_valid INTEGER,
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_eval_case_lens_results_result ON eval_case_lens_results(eval_case_result_id);
+
+-- Per-gate (ruff/mypy/pytest) outcome per eval case. Expected to be all
+-- passing rows for every case in the current dataset (every snippet is
+-- ruff/mypy-clean by construction, and none carry test files -- see
+-- eval/dataset.py's module docstring). A failing row here on a real
+-- benchmark run means that dataset guarantee broke, not a judge problem.
+CREATE TABLE IF NOT EXISTS eval_case_automated_gates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    eval_case_result_id INTEGER NOT NULL REFERENCES eval_case_results(id),
+    gate_name TEXT NOT NULL,
+    passed INTEGER NOT NULL,
+    detail TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_eval_case_automated_gates_result ON eval_case_automated_gates(eval_case_result_id);
 """
 
 
@@ -357,8 +406,12 @@ def get_eval_run(conn: sqlite3.Connection, eval_run_id: int) -> EvalRun | None:
     )
 
 
-def record_eval_case_result(conn: sqlite3.Connection, result: EvalCaseResult) -> None:
-    conn.execute(
+def record_eval_case_result(conn: sqlite3.Connection, result: EvalCaseResult) -> int:
+    """Returns the new row's id -- Phase 2.1's eval_case_defects/
+    eval_case_lens_results/eval_case_automated_gates all FK off of it, and
+    that id doesn't exist until this INSERT runs.
+    """
+    cursor = conn.execute(
         "INSERT INTO eval_case_results "
         "(eval_run_id, eval_case_id, task_id, expected_verdict, actual_verdict, "
         "expected_defect_category, detected_defect_categories, latency_ms, cost, passed, error) "
@@ -377,6 +430,8 @@ def record_eval_case_result(conn: sqlite3.Connection, result: EvalCaseResult) ->
             result.error,
         ),
     )
+    assert cursor.lastrowid is not None
+    return cursor.lastrowid
 
 
 def get_eval_case_results(conn: sqlite3.Connection, eval_run_id: int) -> list[EvalCaseResult]:
@@ -402,3 +457,111 @@ def get_eval_case_results(conn: sqlite3.Connection, eval_run_id: int) -> list[Ev
         )
         for row in rows
     ]
+
+
+def record_eval_case_defects(
+    conn: sqlite3.Connection, eval_case_result_id: int, defects: list[dict]
+) -> None:
+    """``defects`` is merged["defects"] as produced by verification/pipeline.py
+    -- judge-sourced entries carry a "lens" key (tagged in judge.py's
+    run_judge_gates); script/automated-gate-sourced entries (from
+    automated_defects()) don't, so they fall back to "automated" here.
+    """
+    conn.executemany(
+        "INSERT INTO eval_case_defects "
+        "(eval_case_result_id, lens, defect_id, category, severity, location, fix) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [
+            (
+                eval_case_result_id,
+                d.get("lens") or "automated",
+                d.get("id", ""),
+                d.get("category", ""),
+                d.get("severity", ""),
+                d.get("location", ""),
+                d.get("fix", ""),
+            )
+            for d in defects
+        ],
+    )
+
+
+def get_eval_case_defects(conn: sqlite3.Connection, eval_case_result_id: int) -> list[dict]:
+    rows = conn.execute(
+        "SELECT lens, defect_id, category, severity, location, fix "
+        "FROM eval_case_defects WHERE eval_case_result_id = ? ORDER BY id",
+        (eval_case_result_id,),
+    ).fetchall()
+    return [
+        {
+            "lens": row[0],
+            "id": row[1],
+            "category": row[2],
+            "severity": row[3],
+            "location": row[4],
+            "fix": row[5],
+        }
+        for row in rows
+    ]
+
+
+def record_eval_case_lens_results(
+    conn: sqlite3.Connection, eval_case_result_id: int, lens_results: list[EvalCaseLensResult]
+) -> None:
+    conn.executemany(
+        "INSERT INTO eval_case_lens_results "
+        "(eval_case_result_id, lens, call_status, defect_count, schema_valid, error) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (
+                eval_case_result_id,
+                lr.lens,
+                lr.call_status,
+                lr.defect_count,
+                None if lr.schema_valid is None else int(lr.schema_valid),
+                lr.error,
+            )
+            for lr in lens_results
+        ],
+    )
+
+
+def get_eval_case_lens_results(
+    conn: sqlite3.Connection, eval_case_result_id: int
+) -> list[EvalCaseLensResult]:
+    rows = conn.execute(
+        "SELECT lens, call_status, defect_count, schema_valid, error "
+        "FROM eval_case_lens_results WHERE eval_case_result_id = ? ORDER BY id",
+        (eval_case_result_id,),
+    ).fetchall()
+    return [
+        EvalCaseLensResult(
+            lens=row[0],
+            call_status=row[1],
+            defect_count=row[2],
+            schema_valid=None if row[3] is None else bool(row[3]),
+            error=row[4],
+        )
+        for row in rows
+    ]
+
+
+def record_eval_case_automated_gates(
+    conn: sqlite3.Connection, eval_case_result_id: int, results: list[VerificationResult]
+) -> None:
+    conn.executemany(
+        "INSERT INTO eval_case_automated_gates (eval_case_result_id, gate_name, passed, detail) "
+        "VALUES (?, ?, ?, ?)",
+        [(eval_case_result_id, r.gate_name, int(r.passed), r.detail) for r in results],
+    )
+
+
+def get_eval_case_automated_gates(
+    conn: sqlite3.Connection, eval_case_result_id: int
+) -> list[VerificationResult]:
+    rows = conn.execute(
+        "SELECT gate_name, passed, detail FROM eval_case_automated_gates "
+        "WHERE eval_case_result_id = ? ORDER BY id",
+        (eval_case_result_id,),
+    ).fetchall()
+    return [VerificationResult(gate_name=row[0], passed=bool(row[1]), detail=row[2]) for row in rows]

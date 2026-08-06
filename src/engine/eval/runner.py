@@ -35,7 +35,14 @@ from engine.eval.dataset import (
 from engine.runtime.budget import BudgetController, estimate_cost
 from engine.runtime.gateway import LLMGateway
 from engine.state import db
-from engine.state.models import EvalCaseResult, EvalRun
+from engine.state.models import (
+    AgentExecutionMetric,
+    EvalCaseLensResult,
+    EvalCaseResult,
+    EvalRun,
+    VerificationResult,
+)
+from engine.verification.judge import LENSES
 from engine.verification.pipeline import run_verification
 
 EVAL_ROOT = Path(".engine/eval")
@@ -102,6 +109,55 @@ def _write_case_files(workspace: Path, files: dict[str, str]) -> None:
         target.write_text(content)
 
 
+def _build_lens_results(
+    metrics: list[AgentExecutionMetric], merged: dict | None
+) -> list[EvalCaseLensResult]:
+    """One row per canonical lens (LENSES), always -- including lenses that
+    ran and found nothing, so "found nothing" and "never got called" are
+    distinguishable later. ``merged`` is None exactly when run_verification()
+    raised before returning (run_case()'s except block) -- see the
+    limitation documented in judge.run_judge_gates: a lens whose own call
+    shows status == "ok" in ``metrics`` can still have unknowable
+    defect_count/schema_valid, because a LATER lens's exception discarded
+    the parsed critics before merge() ever ran.
+    """
+    by_lens = {m.agent_name.removeprefix("judge:"): m for m in metrics if m.agent_name.startswith("judge:")}
+
+    defect_counts: dict[str, int] = {}
+    schema_errors: list[str] = []
+    if merged is not None:
+        for d in merged.get("defects", []):
+            lens = d.get("lens")
+            if lens:
+                defect_counts[lens] = defect_counts.get(lens, 0) + 1
+        schema_errors = merged.get("schema_errors", [])
+
+    results: list[EvalCaseLensResult] = []
+    for lens in LENSES:
+        metric = by_lens.get(lens)
+        if metric is None:
+            results.append(EvalCaseLensResult(lens=lens, call_status="not_run", defect_count=None, schema_valid=None))
+        elif metric.status == "error":
+            results.append(
+                EvalCaseLensResult(
+                    lens=lens, call_status="error", defect_count=None, schema_valid=None, error=metric.error
+                )
+            )
+        elif merged is None:
+            results.append(EvalCaseLensResult(lens=lens, call_status="ok", defect_count=None, schema_valid=None))
+        else:
+            schema_valid = not any(err.startswith(f"judge:{lens}:") for err in schema_errors)
+            results.append(
+                EvalCaseLensResult(
+                    lens=lens,
+                    call_status="ok",
+                    defect_count=defect_counts.get(lens, 0),
+                    schema_valid=schema_valid,
+                )
+            )
+    return results
+
+
 def run_case(
     case: EvalCase,
     *,
@@ -127,9 +183,15 @@ def run_case(
     error: str | None = None
     actual_verdict = "UNVERIFIED"
     detected_categories: list[str] = []
+    # None/[] until run_verification() actually returns -- if it raises
+    # partway through, these stay at their initial values (same all-or-
+    # nothing loss as detected_categories above: the exception unwinds
+    # past the point where any of these were ever assigned).
+    merged: dict | None = None
+    automated_results: list[VerificationResult] = []
     try:
         _write_case_files(workspace, case.files)
-        status, merged, _automated = run_verification(
+        status, merged, automated_results = run_verification(
             workspace,
             gateway,
             budget,
@@ -170,6 +232,9 @@ def run_case(
         cost=cost,
         passed=passed,
         error=error,
+        defects=merged.get("defects", []) if merged is not None else [],
+        lens_results=_build_lens_results(metrics, merged),
+        automated_gate_results=automated_results,
     )
 
 
@@ -245,7 +310,10 @@ def run_benchmark(
                 run_id=run_id,
                 eval_run_id=eval_run_id,
             )
-            db.record_eval_case_result(conn, result)
+            eval_case_result_id = db.record_eval_case_result(conn, result)
+            db.record_eval_case_defects(conn, eval_case_result_id, result.defects)
+            db.record_eval_case_lens_results(conn, eval_case_result_id, result.lens_results)
+            db.record_eval_case_automated_gates(conn, eval_case_result_id, result.automated_gate_results)
             conn.commit()
             results.append(result)
 
