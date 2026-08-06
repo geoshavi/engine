@@ -38,9 +38,9 @@ RESPONSE_INSTRUCTION = (
     '"severity": "CRITICAL|HIGH|MEDIUM|LOW", '
     '"location": "path:line or description", "fix": "what to change"}], '
     '"verdict": "OK|FAIL"}\n'
+    "verdict must be 'FAIL' iff at least one defect has severity CRITICAL or HIGH, else 'OK'. "
     "category must be exactly one of CORRECTNESS, SECURITY, or CODE-QUALITY — use the "
     "closest match, never invent a more specific label. "
-    "verdict must be 'FAIL' iff at least one defect has severity CRITICAL or HIGH, else 'OK'. "
     "Return {\"defects\": [], \"verdict\": \"OK\"} if you find nothing to flag."
 )
 
