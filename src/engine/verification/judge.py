@@ -32,17 +32,14 @@ LENSES = {
     ),
 }
 
-CATEGORY_BY_LENS = {
-    "correctness": "CORRECTNESS",
-    "security": "SECURITY",
-    "code-quality": "CODE-QUALITY",
-}
-
 RESPONSE_INSTRUCTION = (
     "\n\nRespond with ONLY a JSON object, no prose before or after, no markdown fences:\n"
-    '{"defects": [{"id": "C1", "category": "%s", "severity": "CRITICAL|HIGH|MEDIUM|LOW", '
+    '{"defects": [{"id": "C1", "category": "CORRECTNESS|SECURITY|CODE-QUALITY", '
+    '"severity": "CRITICAL|HIGH|MEDIUM|LOW", '
     '"location": "path:line or description", "fix": "what to change"}], '
     '"verdict": "OK|FAIL"}\n'
+    "category must be exactly one of CORRECTNESS, SECURITY, or CODE-QUALITY — use the "
+    "closest match, never invent a more specific label. "
     "verdict must be 'FAIL' iff at least one defect has severity CRITICAL or HIGH, else 'OK'. "
     "Return {\"defects\": [], \"verdict\": \"OK\"} if you find nothing to flag."
 )
@@ -140,7 +137,7 @@ def run_judge_gates(
             messages=[
                 Message(
                     role="user",
-                    content=prompt + RESPONSE_INSTRUCTION % CATEGORY_BY_LENS[lens_name],
+                    content=prompt + RESPONSE_INSTRUCTION,
                 )
             ],
             model=model,
