@@ -20,10 +20,14 @@ LENSES = {
     ),
     "code-quality": (
         "You are a strict, adversarial code reviewer focused ONLY on code quality: naming "
-        "(including function/method names that misrepresent what the code actually does), "
-        "magic numbers or hardcoded literals that should be named constants, structure, "
-        "unnecessary complexity, dead code. Ignore correctness and security — those are "
-        "reviewed separately."
+        "(a naming defect exists when an identifier creates a misleading contract about the "
+        "function's actual behavior — for example, a getter name that also creates state; do "
+        "not flag normal naming preferences), magic numbers (only flag a literal when it "
+        "represents configurable policy, a threshold, a limit, or a domain decision that would "
+        "reasonably benefit from a named constant), structure, unnecessary complexity, dead "
+        "code. Do NOT flag cryptographic parameters, protocol/algorithm constants, "
+        "mathematical constants, one-off labels/messages, or obvious self-documenting values. "
+        "Ignore correctness and security — those are reviewed separately."
     ),
 }
 
