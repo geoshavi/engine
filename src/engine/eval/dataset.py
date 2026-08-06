@@ -31,7 +31,7 @@ from dataclasses import dataclass
 
 BENCHMARK_NAME = "engine-review-benchmark"
 BENCHMARK_VERSION = "v1"
-DATASET_VERSION = "v1"
+DATASET_VERSION = "v2"
 
 CATEGORIES = ("correctness", "security", "quality", "edge_case")
 # The only three dimensions the judge schema (verification/rubric.py) accepts.
@@ -71,6 +71,8 @@ TASKS: list[EvalTask] = [
         broken_files={
             "solution.py": (
                 "def paginate(items: list[int], page: int, page_size: int) -> list[int]:\n"
+                "    if page < 1 or page_size < 1:\n"
+                "        raise ValueError(\"page and page_size must be positive\")\n"
                 "    start = page * page_size\n"
                 "    end = start + page_size\n"
                 "    return items[start:end]\n"
@@ -79,6 +81,8 @@ TASKS: list[EvalTask] = [
         clean_files={
             "solution.py": (
                 "def paginate(items: list[int], page: int, page_size: int) -> list[int]:\n"
+                "    if page < 1 or page_size < 1:\n"
+                "        raise ValueError(\"page and page_size must be positive\")\n"
                 "    start = (page - 1) * page_size\n"
                 "    end = start + page_size\n"
                 "    return items[start:end]\n"
@@ -282,8 +286,9 @@ TASKS: list[EvalTask] = [
         task_id="security-05",
         category="security",
         task_text=(
-            "Implement verify_signature(expected, provided) -> bool used to authenticate "
-            "an incoming webhook by comparing signatures."
+            "Implement verify_signature(expected, provided) -> bool that securely "
+            "compares two pre-computed signature strings for equality, guarding "
+            "against timing attacks."
         ),
         expected_defect_category="SECURITY",
         broken_files={
@@ -312,7 +317,8 @@ TASKS: list[EvalTask] = [
         broken_files={
             "solution.py": (
                 "import hashlib\n"
-                "import re\n\n\n"
+                "import re\n"
+                "import secrets\n\n\n"
                 "def register_user(name: str, email: str, password: str) -> dict[str, str]:\n"
                 "    if not name or len(name) < 2:\n"
                 "        raise ValueError(\"name too short\")\n"
@@ -323,9 +329,14 @@ TASKS: list[EvalTask] = [
                 "    has_digit = any(c.isdigit() for c in password)\n"
                 "    if not has_digit:\n"
                 "        raise ValueError(\"password needs a digit\")\n"
-                "    salt = \"static-salt\"\n"
+                "    salt = secrets.token_hex(16)\n"
                 "    hashed = hashlib.sha256((password + salt).encode()).hexdigest()\n"
-                "    record = {\"name\": name.strip(), \"email\": email.lower(), \"password_hash\": hashed}\n"
+                "    record = {\n"
+                "        \"name\": name.strip(),\n"
+                "        \"email\": email.lower(),\n"
+                "        \"password_hash\": hashed,\n"
+                "        \"password_salt\": salt,\n"
+                "    }\n"
                 "    subject = \"Welcome, \" + name\n"
                 "    body = \"Your account \" + email + \" is ready.\"\n"
                 "    print(f\"EMAIL to {email}: {subject} -- {body}\")\n"
@@ -335,7 +346,8 @@ TASKS: list[EvalTask] = [
         clean_files={
             "solution.py": (
                 "import hashlib\n"
-                "import re\n\n\n"
+                "import re\n"
+                "import secrets\n\n\n"
                 "def _validate_name(name: str) -> str:\n"
                 "    if not name or len(name) < 2:\n"
                 "        raise ValueError(\"name too short\")\n"
@@ -344,18 +356,24 @@ TASKS: list[EvalTask] = [
                 "    if not re.match(r\"^[^@]+@[^@]+\\.[^@]+$\", email):\n"
                 "        raise ValueError(\"invalid email\")\n"
                 "    return email.lower()\n\n\n"
-                "def _hash_password(password: str) -> str:\n"
+                "def _hash_password(password: str) -> tuple[str, str]:\n"
                 "    if len(password) < 8 or not any(c.isdigit() for c in password):\n"
                 "        raise ValueError(\"password too weak\")\n"
-                "    salt = \"static-salt\"\n"
-                "    return hashlib.sha256((password + salt).encode()).hexdigest()\n\n\n"
+                "    salt = secrets.token_hex(16)\n"
+                "    hashed = hashlib.sha256((password + salt).encode()).hexdigest()\n"
+                "    return hashed, salt\n\n\n"
                 "def _send_welcome_email(name: str, email: str) -> None:\n"
                 "    print(f\"EMAIL to {email}: Welcome, {name} -- Your account {email} is ready.\")\n\n\n"
                 "def register_user(name: str, email: str, password: str) -> dict[str, str]:\n"
                 "    clean_name = _validate_name(name)\n"
                 "    clean_email = _validate_email(email)\n"
-                "    password_hash = _hash_password(password)\n"
-                "    record = {\"name\": clean_name, \"email\": clean_email, \"password_hash\": password_hash}\n"
+                "    password_hash, password_salt = _hash_password(password)\n"
+                "    record = {\n"
+                "        \"name\": clean_name,\n"
+                "        \"email\": clean_email,\n"
+                "        \"password_hash\": password_hash,\n"
+                "        \"password_salt\": password_salt,\n"
+                "    }\n"
                 "    _send_welcome_email(clean_name, clean_email)\n"
                 "    return record\n"
             )
@@ -372,17 +390,19 @@ TASKS: list[EvalTask] = [
         broken_files={
             "solution.py": (
                 "def validate_signup(email: str, age: int) -> bool:\n"
-                "    if \"@\" not in email:\n"
+                "    local, sep, domain = email.partition(\"@\")\n"
+                "    if not sep or not local:\n"
                 "        return False\n"
-                "    domain = email.partition(\"@\")[2]\n"
-                "    if \".\" not in domain:\n"
+                "    domain_prefix, dot, tld = domain.rpartition(\".\")\n"
+                "    if not dot or not domain_prefix or not tld:\n"
                 "        return False\n"
                 "    return 13 <= age <= 120\n\n\n"
                 "def validate_profile_update(email: str, age: int) -> bool:\n"
-                "    if \"@\" not in email:\n"
+                "    local, sep, domain = email.partition(\"@\")\n"
+                "    if not sep or not local:\n"
                 "        return False\n"
-                "    domain = email.partition(\"@\")[2]\n"
-                "    if \".\" not in domain:\n"
+                "    domain_prefix, dot, tld = domain.rpartition(\".\")\n"
+                "    if not dot or not domain_prefix or not tld:\n"
                 "        return False\n"
                 "    return 13 <= age <= 120\n"
             )
@@ -390,10 +410,11 @@ TASKS: list[EvalTask] = [
         clean_files={
             "solution.py": (
                 "def _is_valid_email_and_age(email: str, age: int) -> bool:\n"
-                "    if \"@\" not in email:\n"
+                "    local, sep, domain = email.partition(\"@\")\n"
+                "    if not sep or not local:\n"
                 "        return False\n"
-                "    domain = email.partition(\"@\")[2]\n"
-                "    if \".\" not in domain:\n"
+                "    domain_prefix, dot, tld = domain.rpartition(\".\")\n"
+                "    if not dot or not domain_prefix or not tld:\n"
                 "        return False\n"
                 "    return 13 <= age <= 120\n\n\n"
                 "def validate_signup(email: str, age: int) -> bool:\n"
@@ -416,7 +437,7 @@ TASKS: list[EvalTask] = [
                 "def get_user(users: dict[int, dict[str, str]], user_id: int) -> dict[str, str]:\n"
                 "    if user_id in users:\n"
                 "        return users[user_id]\n"
-                "    new_user = {\"id\": str(user_id), \"name\": \"New User\"}\n"
+                "    new_user = {\"name\": \"New User\"}\n"
                 "    users[user_id] = new_user\n"
                 "    return new_user\n"
             )
@@ -426,7 +447,7 @@ TASKS: list[EvalTask] = [
                 "def get_or_create_user(users: dict[int, dict[str, str]], user_id: int) -> dict[str, str]:\n"
                 "    if user_id in users:\n"
                 "        return users[user_id]\n"
-                "    new_user = {\"id\": str(user_id), \"name\": \"New User\"}\n"
+                "    new_user = {\"name\": \"New User\"}\n"
                 "    users[user_id] = new_user\n"
                 "    return new_user\n"
             )
@@ -635,7 +656,8 @@ TASKS: list[EvalTask] = [
                 "            self._value += 1\n\n"
                 "    @property\n"
                 "    def value(self) -> int:\n"
-                "        return self._value\n"
+                "        with self._lock:\n"
+                "            return self._value\n"
             )
         },
     ),
