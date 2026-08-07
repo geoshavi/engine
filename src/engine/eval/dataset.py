@@ -31,7 +31,7 @@ from dataclasses import dataclass
 
 BENCHMARK_NAME = "engine-review-benchmark"
 BENCHMARK_VERSION = "v1"
-DATASET_VERSION = "v2"
+DATASET_VERSION = "v3"
 
 CATEGORIES = ("correctness", "security", "quality", "edge_case")
 # The only three dimensions the judge schema (verification/rubric.py) accepts.
@@ -227,7 +227,12 @@ TASKS: list[EvalTask] = [
             "solution.py": (
                 "import subprocess\n\n\n"
                 "def convert_to_png(filename: str) -> None:\n"
-                "    subprocess.run([\"convert\", filename, f\"{filename}.png\"], check=True)\n"
+                "    if not filename or \"..\" in filename or \"/\" in filename:\n"
+                "        raise ValueError(\"invalid filename\")\n"
+                "    try:\n"
+                "        subprocess.run([\"convert\", filename, f\"{filename}.png\"], check=True)\n"
+                "    except subprocess.CalledProcessError as exc:\n"
+                "        raise RuntimeError(f\"image conversion failed for {filename!r}\") from exc\n"
             )
         },
     ),
@@ -310,72 +315,38 @@ TASKS: list[EvalTask] = [
         task_id="quality-01",
         category="quality",
         task_text=(
-            "Implement register_user(name, email, password) -> dict that validates the "
-            "inputs, hashes the password, and returns the new user record ready to store."
+            "Implement summarize_inventory(items) -> dict where items is a list of "
+            "(name, quantity, unit_price) tuples: return the total quantity, the total "
+            "value (quantity times unit_price, summed), and the sorted list of item names."
         ),
         expected_defect_category="CODE-QUALITY",
         broken_files={
             "solution.py": (
-                "import hashlib\n"
-                "import re\n"
-                "import secrets\n\n\n"
-                "def register_user(name: str, email: str, password: str) -> dict[str, str]:\n"
-                "    if not name or len(name) < 2:\n"
-                "        raise ValueError(\"name too short\")\n"
-                "    if not re.match(r\"^[^@]+@[^@]+\\.[^@]+$\", email):\n"
-                "        raise ValueError(\"invalid email\")\n"
-                "    if len(password) < 8:\n"
-                "        raise ValueError(\"password too short\")\n"
-                "    has_digit = any(c.isdigit() for c in password)\n"
-                "    if not has_digit:\n"
-                "        raise ValueError(\"password needs a digit\")\n"
-                "    salt = secrets.token_hex(16)\n"
-                "    hashed = hashlib.sha256((password + salt).encode()).hexdigest()\n"
-                "    record = {\n"
-                "        \"name\": name.strip(),\n"
-                "        \"email\": email.lower(),\n"
-                "        \"password_hash\": hashed,\n"
-                "        \"password_salt\": salt,\n"
+                "def summarize_inventory(items: list[tuple[str, int, float]]) -> dict[str, object]:\n"
+                "    total_quantity = sum(quantity for _, quantity, _ in items)\n"
+                "    total_value = sum(quantity * unit_price for _, quantity, unit_price in items)\n"
+                "    item_names = sorted(name for name, _, _ in items)\n"
+                "    return {\n"
+                "        \"total_quantity\": total_quantity,\n"
+                "        \"total_value\": total_value,\n"
+                "        \"item_names\": item_names,\n"
                 "    }\n"
-                "    subject = \"Welcome, \" + name\n"
-                "    body = \"Your account \" + email + \" is ready.\"\n"
-                "    print(f\"EMAIL to {email}: {subject} -- {body}\")\n"
-                "    return record\n"
             )
         },
         clean_files={
             "solution.py": (
-                "import hashlib\n"
-                "import re\n"
-                "import secrets\n\n\n"
-                "def _validate_name(name: str) -> str:\n"
-                "    if not name or len(name) < 2:\n"
-                "        raise ValueError(\"name too short\")\n"
-                "    return name.strip()\n\n\n"
-                "def _validate_email(email: str) -> str:\n"
-                "    if not re.match(r\"^[^@]+@[^@]+\\.[^@]+$\", email):\n"
-                "        raise ValueError(\"invalid email\")\n"
-                "    return email.lower()\n\n\n"
-                "def _hash_password(password: str) -> tuple[str, str]:\n"
-                "    if len(password) < 8 or not any(c.isdigit() for c in password):\n"
-                "        raise ValueError(\"password too weak\")\n"
-                "    salt = secrets.token_hex(16)\n"
-                "    hashed = hashlib.sha256((password + salt).encode()).hexdigest()\n"
-                "    return hashed, salt\n\n\n"
-                "def _send_welcome_email(name: str, email: str) -> None:\n"
-                "    print(f\"EMAIL to {email}: Welcome, {name} -- Your account {email} is ready.\")\n\n\n"
-                "def register_user(name: str, email: str, password: str) -> dict[str, str]:\n"
-                "    clean_name = _validate_name(name)\n"
-                "    clean_email = _validate_email(email)\n"
-                "    password_hash, password_salt = _hash_password(password)\n"
-                "    record = {\n"
-                "        \"name\": clean_name,\n"
-                "        \"email\": clean_email,\n"
-                "        \"password_hash\": password_hash,\n"
-                "        \"password_salt\": password_salt,\n"
+                "def _total_quantity(items: list[tuple[str, int, float]]) -> int:\n"
+                "    return sum(quantity for _, quantity, _ in items)\n\n\n"
+                "def _total_value(items: list[tuple[str, int, float]]) -> float:\n"
+                "    return sum(quantity * unit_price for _, quantity, unit_price in items)\n\n\n"
+                "def _sorted_item_names(items: list[tuple[str, int, float]]) -> list[str]:\n"
+                "    return sorted(name for name, _, _ in items)\n\n\n"
+                "def summarize_inventory(items: list[tuple[str, int, float]]) -> dict[str, object]:\n"
+                "    return {\n"
+                "        \"total_quantity\": _total_quantity(items),\n"
+                "        \"total_value\": _total_value(items),\n"
+                "        \"item_names\": _sorted_item_names(items),\n"
                 "    }\n"
-                "    _send_welcome_email(clean_name, clean_email)\n"
-                "    return record\n"
             )
         },
     ),
@@ -409,6 +380,8 @@ TASKS: list[EvalTask] = [
         },
         clean_files={
             "solution.py": (
+                "MIN_AGE = 13\n"
+                "MAX_AGE = 120\n\n\n"
                 "def _is_valid_email_and_age(email: str, age: int) -> bool:\n"
                 "    local, sep, domain = email.partition(\"@\")\n"
                 "    if not sep or not local:\n"
@@ -416,7 +389,7 @@ TASKS: list[EvalTask] = [
                 "    domain_prefix, dot, tld = domain.rpartition(\".\")\n"
                 "    if not dot or not domain_prefix or not tld:\n"
                 "        return False\n"
-                "    return 13 <= age <= 120\n\n\n"
+                "    return MIN_AGE <= age <= MAX_AGE\n\n\n"
                 "def validate_signup(email: str, age: int) -> bool:\n"
                 "    return _is_valid_email_and_age(email, age)\n\n\n"
                 "def validate_profile_update(email: str, age: int) -> bool:\n"
@@ -444,10 +417,11 @@ TASKS: list[EvalTask] = [
         },
         clean_files={
             "solution.py": (
+                "DEFAULT_USER = {\"name\": \"New User\"}\n\n\n"
                 "def get_or_create_user(users: dict[int, dict[str, str]], user_id: int) -> dict[str, str]:\n"
                 "    if user_id in users:\n"
                 "        return users[user_id]\n"
-                "    new_user = {\"name\": \"New User\"}\n"
+                "    new_user = dict(DEFAULT_USER)\n"
                 "    users[user_id] = new_user\n"
                 "    return new_user\n"
             )
@@ -487,14 +461,15 @@ TASKS: list[EvalTask] = [
         },
         clean_files={
             "solution.py": (
+                "HIGH_VALUE_THRESHOLD = 100\n\n\n"
                 "def classify_order(total: float, is_member: bool, has_coupon: bool, in_stock: bool) -> str:\n"
                 "    if not in_stock:\n"
                 "        return \"rejected\"\n"
-                "    if is_member and has_coupon and total > 100:\n"
+                "    if is_member and has_coupon and total > HIGH_VALUE_THRESHOLD:\n"
                 "        return \"vip_discount\"\n"
                 "    if is_member and has_coupon:\n"
                 "        return \"member_coupon_discount\"\n"
-                "    if is_member and total > 100:\n"
+                "    if is_member and total > HIGH_VALUE_THRESHOLD:\n"
                 "        return \"member_discount\"\n"
                 "    if is_member:\n"
                 "        return \"member_standard\"\n"
@@ -509,7 +484,8 @@ TASKS: list[EvalTask] = [
         category="quality",
         task_text=(
             "Implement compute_ticket_price(age, base_price) -> float: children under 18 "
-            "get a 15% discount off the base price, no other adjustments."
+            "get a 15% discount off the base price, no other adjustments. Raise ValueError "
+            "if age or base_price is negative."
         ),
         expected_defect_category="CODE-QUALITY",
         broken_files={
@@ -525,6 +501,8 @@ TASKS: list[EvalTask] = [
                 "CHILD_AGE_CUTOFF = 18\n"
                 "CHILD_DISCOUNT_RATE = 0.15\n\n\n"
                 "def compute_ticket_price(age: int, base_price: float) -> float:\n"
+                "    if age < 0 or base_price < 0:\n"
+                "        raise ValueError(\"age and base_price must be non-negative\")\n"
                 "    if age < CHILD_AGE_CUTOFF:\n"
                 "        return base_price * (1 - CHILD_DISCOUNT_RATE)\n"
                 "    return base_price\n"
@@ -607,7 +585,8 @@ TASKS: list[EvalTask] = [
         category="edge_case",
         task_text=(
             "Implement is_business_hours(hour) -> bool returning True for hours in [9, 17) "
-            "using 24-hour time -- 9:00 is open, 17:00 is already closed."
+            "using 24-hour time -- 9:00 is open, 17:00 is already closed. Raise ValueError "
+            "if hour is outside [0, 23]."
         ),
         expected_defect_category="CORRECTNESS",
         broken_files={
@@ -619,6 +598,8 @@ TASKS: list[EvalTask] = [
         clean_files={
             "solution.py": (
                 "def is_business_hours(hour: int) -> bool:\n"
+                "    if not isinstance(hour, int) or hour < 0 or hour > 23:\n"
+                "        raise ValueError(\"hour must be an integer in [0, 23]\")\n"
                 "    return 9 <= hour < 17\n"
             )
         },
