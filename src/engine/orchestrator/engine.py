@@ -7,11 +7,10 @@ already depends on.
 
 from pathlib import Path
 
-from engine.config import Config
+from engine.config import DEFAULT_MODELS, Config
 from engine.orchestrator.execution_plan import build_execution_plan
 from engine.orchestrator.manager import OrchestratorManager
 from engine.orchestrator.task_analyzer import classify_task
-from engine.providers.registry import DEFAULT_MODELS
 from engine.runtime.gateway import LLMGateway
 from engine.state.models import RunResult
 

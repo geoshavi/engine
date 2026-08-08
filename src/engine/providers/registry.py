@@ -5,19 +5,6 @@ from engine.providers.google_provider import GoogleProvider
 from engine.providers.ollama_provider import OllamaProvider
 from engine.providers.openai_provider import OpenAIProvider
 
-# Default model per task-class, used until the M2 routing/experimentation
-# system learns per-task-class choices from real verification outcomes.
-DEFAULT_MODELS = {
-    "anthropic": {
-        "coding": "claude-sonnet-5",
-        "research": "claude-sonnet-5",
-        "testing": "claude-sonnet-5",
-        "refactoring": "claude-sonnet-5",
-        "judge": "claude-haiku-4-5-20251001",
-        "planner": "claude-sonnet-5",
-    },
-}
-
 
 def build_provider(name: str, config: Config) -> Provider:
     if name == "anthropic":

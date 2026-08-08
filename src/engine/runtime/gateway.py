@@ -19,7 +19,8 @@ import time
 from decimal import Decimal
 
 from engine.config import Config
-from engine.providers.base import GenerationResult, Message, Provider
+from engine.llm_types import GenerationResult, Message
+from engine.providers.base import Provider
 from engine.providers.registry import build_provider
 from engine.runtime.budget import BudgetController
 from engine.state import db

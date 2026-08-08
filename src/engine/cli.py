@@ -2,7 +2,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from engine.config import load_config
+from engine.config import DEFAULT_MODELS, load_config
 from engine.orchestrator.engine import run_task
 from engine.reporting.report import generate_report
 from engine.runtime.gateway import LLMGateway
@@ -74,7 +74,6 @@ def main() -> None:
             format_dry_run_plan,
         )
         from engine.eval.runner import run_benchmark, select_cases
-        from engine.providers.registry import DEFAULT_MODELS
         from engine.state import db
 
         config = load_config()

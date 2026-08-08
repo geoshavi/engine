@@ -2,8 +2,8 @@ import re
 import sqlite3
 from pathlib import Path
 
+from engine.llm_types import Message
 from engine.orchestrator.agents.base import AgentContext, AgentOutput
-from engine.providers.base import Message
 from engine.runtime.budget import BudgetController
 from engine.runtime.gateway import LLMGateway
 

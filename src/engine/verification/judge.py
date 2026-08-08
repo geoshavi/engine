@@ -2,7 +2,7 @@ import json
 import sqlite3
 from collections.abc import Callable
 
-from engine.providers.base import Message
+from engine.llm_types import Message
 from engine.runtime.budget import BudgetController
 from engine.runtime.gateway import LLMGateway
 from engine.verification.schema import enforce_critic_schema

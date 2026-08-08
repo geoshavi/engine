@@ -20,9 +20,8 @@ from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from engine.config import Config, load_config
+from engine.config import DEFAULT_MODELS, Config, load_config
 from engine.orchestrator.agents.common import write_files
-from engine.providers.registry import DEFAULT_MODELS
 from engine.runtime.budget import BudgetController
 from engine.runtime.gateway import LLMGateway
 from engine.verification.pipeline import run_verification

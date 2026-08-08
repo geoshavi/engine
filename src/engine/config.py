@@ -7,6 +7,26 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Default model per task-class, used until the M2 routing/experimentation
+# system learns per-task-class choices from real verification outcomes.
+#
+# Lives here rather than in providers/registry.py (where it started) because
+# it is configuration, not provider machinery: a plain dict of model-name
+# strings that can't construct or call anything. Its old home forced api.py,
+# cli.py, and orchestrator/engine.py to import the provider package purely to
+# read config, which Rule B in tests/test_architecture.py had to allowlist as
+# a standing exception. Keyed by provider name, then task-class.
+DEFAULT_MODELS = {
+    "anthropic": {
+        "coding": "claude-sonnet-5",
+        "research": "claude-sonnet-5",
+        "testing": "claude-sonnet-5",
+        "refactoring": "claude-sonnet-5",
+        "judge": "claude-haiku-4-5-20251001",
+        "planner": "claude-sonnet-5",
+    },
+}
+
 
 @dataclass(frozen=True)
 class Config:

@@ -4,23 +4,37 @@ which rule it broke, so a regression is diagnosable from the assertion
 alone:
 
   Rule A: only runtime/ and providers/ may import a provider SDK directly.
-  Rule B: only runtime/gateway.py may reach anything under providers/ that
-          could construct or call a live provider. Implemented as an
-          ALLOWLIST, not a blocklist: everything under providers/ is
-          forbidden outside the Gateway EXCEPT the two specific things
-          proven to carry no bypass risk --
-            (1) any name from providers.base (Message, GenerationResult,
-                the Provider Protocol type) -- pure data/typing, no way to
-                make a real call. Every caller of gateway.generate() needs
-                Message just to build its arguments, so forbidding it would
-                make the Gateway's own public API unusable.
-            (2) providers.registry.DEFAULT_MODELS specifically -- a plain
-                dict of model-name strings, not anything that can call out.
-          A blocklist (naming AnthropicProvider, build_provider, etc.)
-          was tried first and missed `import engine.providers` reaching
-          the same classes via attribute access -- an allowlist doesn't
-          have that failure mode: anything not explicitly vetted is
-          forbidden by construction, including bare/parent-package imports.
+  Rule B: only runtime/gateway.py may import anything under providers/, with
+          NO exceptions -- nothing outside providers/ itself names that
+          package at all.
+
+          This rule previously carried two standing allowlist exceptions,
+          both of which were symptoms of things living in the wrong place
+          rather than genuine needs. Recording them because the reasoning
+          that removed them is the reason the rule can now be absolute:
+
+            (1) `any name from providers.base` was allowed because Message
+                and GenerationResult are the argument/return types of
+                gateway.generate(), so every caller needed them -- the
+                Gateway's own public API forced callers across the very
+                boundary this rule exists to protect. Fixed by moving those
+                two types to engine/llm_types.py, a neutral leaf owned by
+                neither side (Rule F keeps it a leaf). The Provider protocol
+                stayed in providers/base.py; nothing outside providers/ and
+                the Gateway needs it.
+            (2) `providers.registry.DEFAULT_MODELS` was allowed because it
+                is a plain dict of model-name strings that cannot call out.
+                True, but it is configuration, not provider machinery, and
+                its placement made api.py, cli.py, and orchestrator/engine.py
+                import the provider package purely to read config. Fixed by
+                moving it to engine/config.py.
+
+          An allowlist was the right shape while exceptions existed: a
+          blocklist (naming AnthropicProvider, build_provider, etc.) was
+          tried first and missed `import engine.providers` reaching the same
+          classes via attribute access. With zero exceptions the distinction
+          is moot -- every import form is judged by module path alone, which
+          subsumes both failure modes.
           Residual gap, acknowledged rather than silently ignored: a fully
           dynamic `importlib.import_module("engine.providers...")` has no
           import statement for AST to see at all. No static import scanner
@@ -33,7 +47,7 @@ alone:
   Rule D: eval/ may only depend on verification/, runtime/, and state/
           (plus engine.config, needed everywhere, and stdlib/third-party).
           Everything else -- orchestrator/ (including agents/), providers/,
-          api.py, cli.py, reporting/, routing/ -- is forbidden. This is
+          api.py, cli.py, reporting/ -- is forbidden. This is
           stricter than "don't import providers/ or an SDK" (which Rule
           A/B already give eval/ for free by placement under src/engine/):
           it caught a real violation during development, where eval/runner.py
@@ -46,6 +60,14 @@ alone:
           state). Eval is a *client* of the review flow, not a dependency
           of it; those three packages must stay usable without eval/ ever
           being on the import path.
+  Rule F: engine/llm_types.py must import nothing from engine.* -- it holds
+          the gateway <-> provider data contract precisely because both
+          sides may import it, which also makes it the one module in the
+          tree that every layer can reach. A single engine.* import there
+          would turn it into a back-channel joining layers that Rules B-E
+          otherwise keep apart (e.g. an import of engine.state would hand
+          providers/ a path to the database). Keeping it a stdlib-only leaf
+          is what makes it safe for everyone to depend on.
 """
 
 import ast
@@ -56,13 +78,8 @@ SRC_ROOT = Path(__file__).parent.parent / "src" / "engine"
 # Extend as real SDKs are added (openai, google.generativeai, ollama, ...).
 PROVIDER_SDK_MODULES = {"anthropic"}
 
-# The only (module, name) pairs under providers/ considered safe to import
-# outside the Gateway. Everything else under providers/ is forbidden --
-# see Rule B docstring above for why this is an allowlist, not a blocklist.
-ALLOWED_FROM_IMPORTS = {("engine.providers.registry", "DEFAULT_MODELS")}
-ALLOWED_BASE_MODULE = "engine.providers.base"
-
 GATEWAY_FILE = SRC_ROOT / "runtime" / "gateway.py"
+LLM_TYPES_FILE = SRC_ROOT / "llm_types.py"
 
 # eval/'s allowed engine.* dependency surface -- see Rule D docstring above.
 EVAL_ALLOWED_ENGINE_PACKAGES = {"engine.eval", "engine.verification", "engine.runtime", "engine.state"}
@@ -92,29 +109,6 @@ def _imported_module_names(path: Path) -> list[str]:
     return names
 
 
-def _bare_imported_modules(path: Path) -> list[str]:
-    """Module names from `import x` statements only (not `from x import
-    y`) -- checked separately by Rule B: a bare `import engine.providers`
-    (or `import engine.providers.registry`, etc.) grants attribute access
-    to whatever that module contains, so it's judged by module path alone,
-    unlike `from x import y` which can be judged name-by-name.
-    """
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    return [alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names]
-
-
-def _imported_names(path: Path) -> list[tuple[str, str]]:
-    """(module, imported_name) pairs from `from module import name`
-    statements only.
-    """
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    pairs: list[tuple[str, str]] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module:
-            pairs.extend((node.module, alias.name) for alias in node.names)
-    return pairs
-
-
 def _is_in_package(path: Path, package_dir: str) -> bool:
     return (SRC_ROOT / package_dir) in path.parents
 
@@ -140,25 +134,19 @@ def test_rule_b_only_gateway_imports_a_provider_implementation() -> None:
         if _is_in_package(path, "providers") or path == GATEWAY_FILE:
             continue
 
-        # `import engine.providers[...]` -- allowlist by module path, since
-        # a bare import grants attribute access to everything inside it.
-        for name in _bare_imported_modules(path):
-            if name == "engine.providers" or (
-                name.startswith("engine.providers.") and name != ALLOWED_BASE_MODULE
-            ):
+        # No exceptions: judged by module path alone, which covers both
+        # `import engine.providers[.X]` (attribute access to everything
+        # inside) and `from engine.providers.X import Y` (any name). See the
+        # Rule B docstring for the two exceptions this used to carry and
+        # what replaced them.
+        for name in _imported_module_names(path):
+            if name == "engine.providers" or name.startswith("engine.providers."):
                 violations.append(f"{_relative(path)}: imports {name!r} (Rule B)")
 
-        # `from engine.providers.X import Y` -- allowlist by (module, name),
-        # except providers.base where every name is safe (pure data/typing).
-        for module, imported_name in _imported_names(path):
-            if module == ALLOWED_BASE_MODULE:
-                continue
-            if module.startswith("engine.providers.") and (module, imported_name) not in ALLOWED_FROM_IMPORTS:
-                violations.append(f"{_relative(path)}: imports {imported_name!r} from {module!r} (Rule B)")
-
     assert not violations, (
-        "Only runtime/gateway.py may import something that can construct or call a live "
-        "provider -- everything else must go through the Gateway:\n" + "\n".join(violations)
+        "Only runtime/gateway.py may import anything under providers/ -- everything else "
+        "must go through the Gateway (Message/GenerationResult live in engine.llm_types, "
+        "DEFAULT_MODELS in engine.config):\n" + "\n".join(violations)
     )
 
 
@@ -213,4 +201,24 @@ def test_rule_e_eval_is_never_imported_by_verification_runtime_state() -> None:
     assert not violations, (
         "verification/, runtime/, and state/ must never import eval/ -- the dependency runs "
         "one way only (eval -> verification/runtime/state):\n" + "\n".join(violations)
+    )
+
+
+def test_rule_f_llm_types_stays_a_leaf() -> None:
+    # Asserted rather than skipped-if-missing: if this file is renamed or
+    # removed, the rule must fail loudly rather than silently pass by
+    # scanning nothing.
+    assert LLM_TYPES_FILE.is_file(), (
+        f"{_relative(LLM_TYPES_FILE)} is missing -- it holds the gateway <-> provider data "
+        "contract that lets Rule B stay exception-free. If it moved, update LLM_TYPES_FILE."
+    )
+    violations = [
+        f"{_relative(LLM_TYPES_FILE)}: imports {name!r} (Rule F)"
+        for name in _imported_module_names(LLM_TYPES_FILE)
+        if name == "engine" or name.startswith("engine.")
+    ]
+    assert not violations, (
+        "engine/llm_types.py must import nothing from engine.* -- every layer is allowed to "
+        "import it, so an engine.* import there becomes a back-channel between layers that "
+        "Rules B-E keep apart:\n" + "\n".join(violations)
     )

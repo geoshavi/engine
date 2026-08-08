@@ -1,23 +1,20 @@
-from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol
+"""The provider-implementation contract.
 
+``Message`` and ``GenerationResult`` are re-exported here, not defined here:
+they are the Gateway's public argument/return types and live in
+``engine.llm_types`` so callers of ``LLMGateway.generate()`` don't have to
+import the provider package to use the Gateway (see that module's docstring,
+and Rule B in tests/test_architecture.py). The re-export keeps the existing
+``from engine.providers.base import GenerationResult, Message`` spelling
+working for the provider implementations in this package, which legitimately
+need these types to satisfy ``Provider``.
+"""
 
-@dataclass(frozen=True)
-class Message:
-    role: Literal["user", "assistant"]
-    content: str
+from typing import Protocol
 
+from engine.llm_types import GenerationResult, Message
 
-@dataclass(frozen=True)
-class GenerationResult:
-    text: str
-    model: str
-    provider: str
-    input_tokens: int
-    output_tokens: int
-    cache_read_tokens: int = 0
-    cache_creation_tokens: int = 0
-    raw: Any = field(default=None, repr=False)
+__all__ = ["GenerationResult", "Message", "Provider"]
 
 
 class Provider(Protocol):
