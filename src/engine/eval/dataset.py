@@ -315,38 +315,43 @@ TASKS: list[EvalTask] = [
         task_id="quality-01",
         category="quality",
         task_text=(
-            "Implement summarize_inventory(items) -> dict where items is a list of "
-            "(name, quantity, unit_price) tuples: return the total quantity, the total "
-            "value (quantity times unit_price, summed), and the sorted list of item names."
+            "Implement build_leaderboard(matches) where matches is a list of (player, points) "
+            "tuples: total each player's points and return one row per player as "
+            "{'rank': int, 'player': str, 'points': int}, ordered by total points descending "
+            "with ties broken by player name ascending, ranks starting at 1."
         ),
         expected_defect_category="CODE-QUALITY",
         broken_files={
             "solution.py": (
-                "def summarize_inventory(items: list[tuple[str, int, float]]) -> dict[str, object]:\n"
-                "    total_quantity = sum(quantity for _, quantity, _ in items)\n"
-                "    total_value = sum(quantity * unit_price for _, quantity, unit_price in items)\n"
-                "    item_names = sorted(name for name, _, _ in items)\n"
-                "    return {\n"
-                "        \"total_quantity\": total_quantity,\n"
-                "        \"total_value\": total_value,\n"
-                "        \"item_names\": item_names,\n"
-                "    }\n"
+                "def build_leaderboard(matches: list[tuple[str, int]]) -> list[dict[str, object]]:\n"
+                "    totals: dict[str, int] = {}\n"
+                "    for player, points in matches:\n"
+                "        if player in totals:\n"
+                "            totals[player] = totals[player] + points\n"
+                "        else:\n"
+                "            totals[player] = points\n"
+                "    ordered = sorted(totals, key=lambda name: (-totals[name], name))\n"
+                "    rows: list[dict[str, object]] = []\n"
+                "    for rank, player in enumerate(ordered, start=1):\n"
+                "        rows.append({\"rank\": rank, \"player\": player, \"points\": totals[player]})\n"
+                "    return rows\n"
             )
         },
         clean_files={
             "solution.py": (
-                "def _total_quantity(items: list[tuple[str, int, float]]) -> int:\n"
-                "    return sum(quantity for _, quantity, _ in items)\n\n\n"
-                "def _total_value(items: list[tuple[str, int, float]]) -> float:\n"
-                "    return sum(quantity * unit_price for _, quantity, unit_price in items)\n\n\n"
-                "def _sorted_item_names(items: list[tuple[str, int, float]]) -> list[str]:\n"
-                "    return sorted(name for name, _, _ in items)\n\n\n"
-                "def summarize_inventory(items: list[tuple[str, int, float]]) -> dict[str, object]:\n"
-                "    return {\n"
-                "        \"total_quantity\": _total_quantity(items),\n"
-                "        \"total_value\": _total_value(items),\n"
-                "        \"item_names\": _sorted_item_names(items),\n"
-                "    }\n"
+                "def _tally_by_player(matches: list[tuple[str, int]]) -> dict[str, int]:\n"
+                "    totals: dict[str, int] = {}\n"
+                "    for player, points in matches:\n"
+                "        totals[player] = totals.get(player, 0) + points\n"
+                "    return totals\n\n\n"
+                "def _rank_order(totals: dict[str, int]) -> list[str]:\n"
+                "    return sorted(totals, key=lambda name: (-totals[name], name))\n\n\n"
+                "def build_leaderboard(matches: list[tuple[str, int]]) -> list[dict[str, object]]:\n"
+                "    totals = _tally_by_player(matches)\n"
+                "    return [\n"
+                "        {\"rank\": rank, \"player\": player, \"points\": totals[player]}\n"
+                "        for rank, player in enumerate(_rank_order(totals), start=1)\n"
+                "    ]\n"
             )
         },
     ),
@@ -407,21 +412,22 @@ TASKS: list[EvalTask] = [
         expected_defect_category="CODE-QUALITY",
         broken_files={
             "solution.py": (
+                "DEFAULT_USER_NAME = \"New User\"\n\n\n"
                 "def get_user(users: dict[int, dict[str, str]], user_id: int) -> dict[str, str]:\n"
                 "    if user_id in users:\n"
                 "        return users[user_id]\n"
-                "    new_user = {\"name\": \"New User\"}\n"
+                "    new_user = {\"name\": DEFAULT_USER_NAME}\n"
                 "    users[user_id] = new_user\n"
                 "    return new_user\n"
             )
         },
         clean_files={
             "solution.py": (
-                "DEFAULT_USER = {\"name\": \"New User\"}\n\n\n"
+                "DEFAULT_USER_NAME = \"New User\"\n\n\n"
                 "def get_or_create_user(users: dict[int, dict[str, str]], user_id: int) -> dict[str, str]:\n"
                 "    if user_id in users:\n"
                 "        return users[user_id]\n"
-                "    new_user = dict(DEFAULT_USER)\n"
+                "    new_user = {\"name\": DEFAULT_USER_NAME}\n"
                 "    users[user_id] = new_user\n"
                 "    return new_user\n"
             )
