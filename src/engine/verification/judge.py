@@ -42,17 +42,6 @@ RESPONSE_INSTRUCTION = (
     "category must be exactly one of CORRECTNESS, SECURITY, or CODE-QUALITY — use the "
     "closest match, never invent a more specific label. "
     "Return {\"defects\": [], \"verdict\": \"OK\"} if you find nothing to flag."
-    " Before reporting any defect, check it against the code exactly as supplied: identify the "
-    "specific line(s) it applies to and confirm the code actually behaves the way your "
-    "description claims. Do not report a defect whose description is contradicted by the "
-    "supplied code, and do not propose a change that would break a requirement the task states. "
-    "Judge the code only against the task as written. A requirement the task does not state -- "
-    "stricter input validation, extra error handling, hardening beyond what was asked, naming, "
-    "typing, documentation, or style preferences -- is not a defect at CRITICAL or HIGH; report "
-    "it at MEDIUM or LOW if it is worth noting at all. Reserve CRITICAL and HIGH for defects "
-    "that make the code fail the task as written, or that introduce a real vulnerability in the "
-    "behavior the task actually asked for. A genuine defect in what the task did ask for is "
-    "still CRITICAL or HIGH -- do not downgrade it."
 )
 
 
