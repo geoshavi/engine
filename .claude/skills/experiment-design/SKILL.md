@@ -66,6 +66,14 @@ Cost is ~$0.124 and ~3.5 min per 40-case run, so N is limited by patience, not b
 sample-size number below is provisional when applied to v3 and must be labelled as
 carried over from v2. Re-derive them once a v3 dispersion estimate exists.
 
+> **FLAG — SUPERSEDED 2026-08-10. Do not use the numbers below for v3 without re-deriving
+> them.** Two identical-configuration v3 clusters now exist (runs 20-28, n=9, SD 0.782;
+> runs 29-36, n=8, SD 1.061), giving a **measured pooled v3 σ ≈ 0.92 cases**. The paragraph
+> above and every table in this section still assume σ ≈ 1.25 and are therefore too
+> conservative for v3: detecting a 2-case shift needs ~4 runs per arm at σ = 0.92, not ~7.
+> **This table must be re-derived from σ ≈ 0.92 before Phase 5 is registered.** See
+> BASELINE.md for the measurement.
+
 Aggregate accuracy, two-sample, α=0.05, 80% power:
 
 | effect to detect | runs per arm |
