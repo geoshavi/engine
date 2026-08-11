@@ -107,7 +107,7 @@ def _write_case_files(workspace: Path, files: dict[str, str]) -> None:
     for relative_path, content in files.items():
         target = workspace / relative_path
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content)
+        target.write_text(content, encoding="utf-8")
 
 
 def _build_lens_results(

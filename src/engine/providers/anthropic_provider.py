@@ -1,6 +1,20 @@
-from anthropic import NOT_GIVEN, Anthropic
+from anthropic import NOT_GIVEN, Anthropic, omit
 
 from engine.providers.base import GenerationResult, Message
+
+# Sampling parameters were removed from the request surface on these model
+# families -- a non-default `temperature` returns a 400. Listing the models
+# that reject it, rather than the ones that accept it, keeps the failure loud:
+# an unrecognised future model still gets temperature=0.0 and errors visibly,
+# instead of silently sampling at the API default of 1.0.
+_TEMPERATURE_REJECTED_BY = (
+    "claude-opus-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-sonnet-5",
+    "claude-fable-5",
+    "claude-mythos-5",
+)
 
 
 class AnthropicProvider:
@@ -27,7 +41,7 @@ class AnthropicProvider:
             system=system or "",
             messages=[{"role": m.role, "content": m.content} for m in messages],
             max_tokens=max_tokens,
-            temperature=temperature,
+            temperature=omit if model.startswith(_TEMPERATURE_REJECTED_BY) else temperature,
             timeout=timeout_seconds if timeout_seconds is not None else NOT_GIVEN,
         )
         text = "".join(block.text for block in response.content if block.type == "text")

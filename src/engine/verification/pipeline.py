@@ -13,7 +13,8 @@ from engine.verification.judge import run_judge_gates
 def read_code_snapshot(workspace: Path) -> str:
     parts = []
     for path in sorted(workspace.rglob("*.py")):
-        parts.append(f"# --- {path.relative_to(workspace)} ---\n{path.read_text()}")
+        content = path.read_text(encoding="utf-8")
+        parts.append(f"# --- {path.relative_to(workspace)} ---\n{content}")
     return "\n\n".join(parts) if parts else "(no code produced)"
 
 

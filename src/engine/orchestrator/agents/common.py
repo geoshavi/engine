@@ -62,7 +62,7 @@ def write_files(workspace: Path, files: dict[str, str]) -> list[str]:
             skipped.append(relative_path)
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content)
+        target.write_text(content, encoding="utf-8")
     return skipped
 
 
@@ -76,7 +76,7 @@ class PromptFileAgent:
     prompt_path: Path
 
     def run(self, context: AgentContext) -> AgentOutput:
-        system_prompt = self.prompt_path.read_text().strip()
+        system_prompt = self.prompt_path.read_text(encoding="utf-8").strip()
         response_text = generate_text(
             context.gateway,
             context.budget,

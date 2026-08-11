@@ -1,4 +1,5 @@
 import argparse
+import io
 import sys
 from pathlib import Path
 
@@ -9,6 +10,14 @@ from engine.runtime.gateway import LLMGateway
 
 
 def main() -> None:
+    # Windows consoles default to cp1252 and agent-generated content routinely
+    # contains characters it cannot encode (U+2264, U+2265, ...). Reconfigure
+    # before any output so terminal rendering can never fail a completed run.
+    # Guarded: under pytest capture stdout is not a TextIOWrapper and has no
+    # reconfigure(), and there is nothing to fix in that case anyway.
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(encoding="utf-8")
+
     parser = argparse.ArgumentParser(prog="engine")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -57,10 +66,12 @@ def main() -> None:
 
         result = run_task(args.task, workspace, gateway, config, provider_name=args.provider)
 
+        # Persist before displaying: the report is the durable artifact, so a
+        # terminal that cannot render it must not cost us the file.
         report = generate_report(result)
-        print(report)
         report_path = workspace.parent / "report.md"
-        report_path.write_text(report)
+        report_path.write_text(report, encoding="utf-8")
+        print(report)
 
         sys.exit(0 if result.passed else 1)
     elif args.command == "serve":
