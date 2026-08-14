@@ -67,11 +67,16 @@ standard deviation of the correct-count. Never report a range alone as if it wer
 dispersion estimate — the "±3/40" figure in BASELINE.md is a range at n=4, roughly 2.4σ,
 not an SD.
 
-Pooled σ ≈ 1.25 cases, from runs 6-9 and 10-12. **That is a v2 measurement.** v3
-dispersion has not been measured — runs 18 and 19 are different configurations, so no
-identical-configuration v3 cluster exists yet. Whenever σ ≈ 1.25 is applied to v3, label
-it provisional and say it is carried over from v2, or the same dataset-boundary rule this
-skill enforces everywhere else is being broken silently.
+Pooled σ ≈ **0.92 cases** — a direct v3 measurement from the two identical-configuration
+clusters `c0515eb` (runs 20-28, n=9, SD 0.782) and `be990c7` (runs 29-36, n=8, SD 1.061).
+This **supersedes the v2 figure of σ ≈ 1.25** (runs 6-9 and 10-12), which must no longer be
+applied to v3.
+
+One boundary remains open: commit `77d36c3` changed `eval/runner.py` and
+`pipeline.py`, both on the measured path, so runs from it forward are a new configuration
+cluster containing one run (37) and no dispersion estimate of its own. Applying σ ≈ 0.92
+there is allowed, but label it as carried over from the `c0515eb`/`be990c7` clusters, or
+the same comparability rule this skill enforces everywhere else is being broken silently.
 
 **Lens-level analysis.** `eval_case_lens_results` gives per-lens `call_status`,
 `defect_count`, and `schema_valid` for every case. Use it to answer which lens produced a

@@ -57,13 +57,15 @@ State the boundary explicitly whenever a comparison approaches one.
 
 ## Never treat a single run as proof
 
-The noise floor is real and measured: identical-commit runs 6-9 span 29-32/40, pooled
-σ ≈ 1.25 cases. Most single-run deltas in the table fall inside it and demonstrate nothing
-on their own.
+The noise floor is real and measured. For v3 the pooled figure is **σ ≈ 0.92 cases**, from
+the identical-configuration clusters `c0515eb` (runs 20-28) and `be990c7` (runs 29-36).
+It **supersedes the v2 σ ≈ 1.25** (identical-commit runs 6-9, which span 29-32/40); the v2
+figure applies only to v1/v2 rows. Most single-run deltas in the table fall inside the
+floor and demonstrate nothing on their own.
 
-That figure comes from **v2** clusters. No identical-configuration v3 cluster exists yet,
-so applying it to v3 crosses the same dataset boundary this skill enforces above — allowed
-as a provisional stand-in, but only when labelled as carried over from v2.
+σ ≈ 0.92 is itself carried over past commit `77d36c3`, which touched the measured path and
+started a new configuration cluster holding one run (37). Applying the figure there is
+allowed as a provisional stand-in, but only when labelled as carried over.
 
 When reporting any delta, state three things together: **the number of runs, the noise
 floor, and whether the delta clears it.** If it does not clear it, say so plainly rather

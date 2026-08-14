@@ -59,45 +59,57 @@ mass shifting MEDIUM→HIGH can confirm a mechanism even when no verdict moves.
 
 ## Sample size
 
-Pooled σ ≈ **1.25 cases** (identical-commit clusters, runs 6-9 and 10-12).
+Pooled σ ≈ **0.92 cases**, measured directly on v3 from the two identical-configuration
+clusters: c0515eb (runs 20-28, n=9, SD 0.782; A1-excluded n=8, SD 0.756) and be990c7
+(runs 29-36, n=8, SD 1.061). Pooling gives 0.9225 with the inclusive baseline and 0.9210
+with the A1-excluded one — the exclusion does not move the figure.
+
+This **supersedes the provisional σ ≈ 1.25** carried over from v2's runs 6-9 and 10-12.
+Do not apply the v2 figure to v3 work. The tables below were re-derived from σ = 0.92 on
+2026-08-14; see BASELINE.md for the underlying measurement.
+
+**σ = 0.92 is itself carried over past commit 77d36c3**, which changed `eval/runner.py`
+and `verification/pipeline.py` — both on the measured path — and therefore started a new
+configuration cluster holding one run (37) and no dispersion estimate of its own. When
+these numbers are applied to runs from 77d36c3 forward, say in the plan that σ is carried
+over from the c0515eb/be990c7 clusters.
+
 Cost is ~$0.124 and ~3.5 min per 40-case run, so N is limited by patience, not budget.
 
-**σ ≈ 1.25 is a v2 figure.** No identical-configuration v3 cluster exists yet, so every
-sample-size number below is provisional when applied to v3 and must be labelled as
-carried over from v2. Re-derive them once a v3 dispersion estimate exists.
-
-> **FLAG — SUPERSEDED 2026-08-10. Do not use the numbers below for v3 without re-deriving
-> them.** Two identical-configuration v3 clusters now exist (runs 20-28, n=9, SD 0.782;
-> runs 29-36, n=8, SD 1.061), giving a **measured pooled v3 σ ≈ 0.92 cases**. The paragraph
-> above and every table in this section still assume σ ≈ 1.25 and are therefore too
-> conservative for v3: detecting a 2-case shift needs ~4 runs per arm at σ = 0.92, not ~7.
-> **This table must be re-derived from σ ≈ 0.92 before Phase 5 is registered.** See
-> BASELINE.md for the measurement.
-
-Aggregate accuracy, two-sample, α=0.05, 80% power:
+Aggregate accuracy, two-sample, α=0.05, 80% power, at σ = 0.92:
 
 | effect to detect | runs per arm |
 |---|---|
-| 3 cases (7.5 pp) | ~3 |
-| 2 cases (5.0 pp) | ~7 |
-| 1.5 cases (3.8 pp) | ~11 |
+| 3 cases (7.5 pp) | ~2 |
+| 2 cases (5.0 pp) | ~4 |
+| 1.5 cases (3.8 pp) | ~6 |
+| 1 case (2.5 pp) | ~14 |
 
-**8 runs per arm detects a ~2-case shift.** State the MDE in the plan; anything smaller is
-not interpretable and must not be reported as an effect.
+**8 runs per arm detects a ~1.3-case aggregate shift** (it detected ~2 cases at σ = 1.25);
+4 runs per arm detects ~1.8. State the MDE in the plan; anything smaller is not
+interpretable and must not be reported as an effect.
 
-Per-case, for a target at baseline 0/8 (Fisher's exact, approximate):
+**Do not shrink N to 4 on the strength of the table above.** That table governs the
+*secondary* metric. The primary metric is the per-case blocking rate — a proportion test,
+unaffected by σ, depending only on N. For a target at baseline 0/N (Fisher's exact,
+two-sided):
 
-| post-change | p | verdict |
-|---|---|---|
-| 3/8 | 0.20 | noise |
-| 4/8 | 0.077 | not sufficient |
-| **5/8** | **0.026** | **significant** |
-| 6/8 | 0.007 | significant |
+| N per arm | post-change | p | verdict |
+|---|---|---|---|
+| 4 | 2/4 | 0.43 | noise |
+| 4 | 3/4 | 0.14 | not sufficient |
+| 4 | **4/4** | **0.029** | **significant** |
+| 8 | 3/8 | 0.20 | noise |
+| 8 | 4/8 | 0.077 | not sufficient |
+| 8 | **5/8** | **0.026** | **significant** |
+| 8 | 6/8 | 0.007 | significant |
 
-**≥5/8 is the threshold.** 4/8 does not clear it, however suggestive it looks.
+**At N=8, ≥5/8 is the threshold** — 4/8 does not clear it, however suggestive it looks.
+At N=4 the primary metric can only ever register an all-or-nothing 4/4 movement, so
+**N=8 per arm remains the working default** despite what the aggregate table permits.
 
-95% CI half-width on the mean correct-count: n=3 → ±3.1 cases; n=5 → ±1.6; n=8 → ±1.0;
-n=12 → ±0.8. Returns fall off sharply after 8.
+95% CI half-width on the mean correct-count at σ = 0.92: n=3 → ±2.3 cases; n=5 → ±1.1;
+n=8 → ±0.8; n=12 → ±0.6. Returns fall off sharply after 8.
 
 ## Anti-post-hoc rules
 
