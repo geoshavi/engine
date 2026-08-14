@@ -13,3 +13,4 @@ dist/
 *.db
 graphify-out/
 research-vault/
+.codex/settings.local.json
