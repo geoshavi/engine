@@ -27,11 +27,18 @@ truncation, non-atomic increment) so the benchmark tests generalization,
 not prompt-keyword matching.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 BENCHMARK_NAME = "engine-review-benchmark"
-BENCHMARK_VERSION = "v1"
-DATASET_VERSION = "v3"
+BENCHMARK_VERSION = "v2"
+DATASET_VERSION = "v4"
+
+# Benchmark v1 remains constructible from this module -- see TASKS_V1 / CASES_V1 at the
+# bottom, which hold the pre-v2 form of every task v2 changed. Runs recorded under
+# benchmark_version v1 / dataset_version v3 are not comparable with v2 runs: v2 restates
+# six task specifications, repairs three fixtures, and corrects one expected category.
+BENCHMARK_V1_VERSION = "v1"
+BENCHMARK_V1_DATASET_VERSION = "v3"
 
 CATEGORIES = ("correctness", "security", "quality", "edge_case")
 # The only three dimensions the judge schema (verification/rubric.py) accepts.
@@ -93,8 +100,9 @@ TASKS: list[EvalTask] = [
         task_id="correctness-02",
         category="correctness",
         task_text=(
-            "Implement is_close_enough(a, b) -> bool that returns True if two floats are "
-            "close enough to be considered equal for currency comparison (within 0.01)."
+            "Implement is_close_enough(a, b) -> bool for comparing currency amounts: "
+            "return True when the two values differ by less than 0.01, and False "
+            "otherwise. A difference of exactly 0.01 is not close enough."
         ),
         expected_defect_category="CORRECTNESS",
         broken_files={
@@ -263,27 +271,48 @@ TASKS: list[EvalTask] = [
         task_id="security-04",
         category="security",
         task_text=(
-            "Implement is_safe_fetch_target(host) -> bool used to guard a URL-preview "
-            "feature against fetching internal/private network addresses (SSRF)."
+            "Implement resolve_safe_fetch_target(host) -> str | None used to guard a "
+            "URL-preview feature against fetching internal/private network addresses (SSRF). "
+            "Return the network address the fetch must connect to, or None when the host has "
+            "no safe address. The caller connects to the address you return and does not look "
+            "the host up again, so the address you return must be one you checked."
         ),
         expected_defect_category="SECURITY",
         broken_files={
             "solution.py": (
-                "def is_safe_fetch_target(host: str) -> bool:\n"
-                "    return True\n"
+                "import socket\n\n\n"
+                "def resolve_safe_fetch_target(host: str) -> str | None:\n"
+                "    return socket.gethostbyname(host)\n"
             )
         },
         clean_files={
             "solution.py": (
                 "import ipaddress\n"
                 "import socket\n\n\n"
-                "def is_safe_fetch_target(host: str) -> bool:\n"
+                "def _is_public(addr: str) -> bool:\n"
+                "    ip = ipaddress.ip_address(addr)\n"
+                "    return not (\n"
+                "        ip.is_private\n"
+                "        or ip.is_loopback\n"
+                "        or ip.is_link_local\n"
+                "        or ip.is_reserved\n"
+                "        or ip.is_multicast\n"
+                "        or ip.is_unspecified\n"
+                "    )\n\n\n"
+                "def resolve_safe_fetch_target(host: str) -> str | None:\n"
                 "    try:\n"
-                "        addr = socket.gethostbyname(host)\n"
-                "        ip = ipaddress.ip_address(addr)\n"
+                "        infos = socket.getaddrinfo(host, None)\n"
                 "    except (OSError, ValueError):\n"
-                "        return False\n"
-                "    return not (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved)\n"
+                "        return None\n"
+                "    addresses = [str(info[4][0]) for info in infos]\n"
+                "    if not addresses:\n"
+                "        return None\n"
+                "    try:\n"
+                "        if not all(_is_public(addr) for addr in addresses):\n"
+                "            return None\n"
+                "    except ValueError:\n"
+                "        return None\n"
+                "    return addresses[0]\n"
             )
         },
     ),
@@ -318,7 +347,9 @@ TASKS: list[EvalTask] = [
             "Implement build_leaderboard(matches) where matches is a list of (player, points) "
             "tuples: total each player's points and return one row per player as "
             "{'rank': int, 'player': str, 'points': int}, ordered by total points descending "
-            "with ties broken by player name ascending, ranks starting at 1."
+            "with ties broken by player name ascending, ranks starting at 1. Express that "
+            "ordering rule in exactly one place: it must not be restated anywhere else in the "
+            "module."
         ),
         expected_defect_category="CODE-QUALITY",
         broken_files={
@@ -326,14 +357,12 @@ TASKS: list[EvalTask] = [
                 "def build_leaderboard(matches: list[tuple[str, int]]) -> list[dict[str, object]]:\n"
                 "    totals: dict[str, int] = {}\n"
                 "    for player, points in matches:\n"
-                "        if player in totals:\n"
-                "            totals[player] = totals[player] + points\n"
-                "        else:\n"
-                "            totals[player] = points\n"
+                "        totals[player] = totals.get(player, 0) + points\n"
                 "    ordered = sorted(totals, key=lambda name: (-totals[name], name))\n"
+                "    ranks = {player: rank for rank, player in enumerate(ordered, start=1)}\n"
                 "    rows: list[dict[str, object]] = []\n"
-                "    for rank, player in enumerate(ordered, start=1):\n"
-                "        rows.append({\"rank\": rank, \"player\": player, \"points\": totals[player]})\n"
+                "    for player in sorted(totals, key=lambda name: (-totals[name], name)):\n"
+                "        rows.append({\"rank\": ranks[player], \"player\": player, \"points\": totals[player]})\n"
                 "    return rows\n"
             )
         },
@@ -359,8 +388,12 @@ TASKS: list[EvalTask] = [
         task_id="quality-02",
         category="quality",
         task_text=(
-            "Implement validate_signup(email, age) and validate_profile_update(email, age), "
-            "each returning True if email contains '@' with a '.' after it, and age is 13-120."
+            "Implement validate_signup(email, age) and validate_profile_update(email, age). "
+            "Both apply the same rule: the email must have a non-empty part before '@', and "
+            "after '@' a domain containing a '.' with non-empty text on both sides of it; the "
+            "age must be between 13 and 120 inclusive. Define that rule once, in a single "
+            "shared implementation both functions call, so the two entry points cannot drift "
+            "apart."
         ),
         expected_defect_category="CODE-QUALITY",
         broken_files={
@@ -406,13 +439,20 @@ TASKS: list[EvalTask] = [
         task_id="quality-03",
         category="quality",
         task_text=(
-            "Implement a function that returns an existing user dict from a users-by-id "
-            "dict if present, otherwise creates and stores a new default user record."
+            "Implement get_or_create_user(users, user_id), using exactly that name: return "
+            "the existing user dict from the users-by-id dict if present, otherwise create a "
+            "new default user record, store it under user_id, and return it. Expose the "
+            "operation under that one name, and build the default record in exactly one "
+            "place, so there is a single definition of what a new user starts out as."
         ),
         expected_defect_category="CODE-QUALITY",
         broken_files={
             "solution.py": (
                 "DEFAULT_USER_NAME = \"New User\"\n\n\n"
+                "def create_user(users: dict[int, dict[str, str]], user_id: int) -> dict[str, str]:\n"
+                "    new_user = {\"name\": DEFAULT_USER_NAME}\n"
+                "    users[user_id] = new_user\n"
+                "    return new_user\n\n\n"
                 "def get_user(users: dict[int, dict[str, str]], user_id: int) -> dict[str, str]:\n"
                 "    if user_id in users:\n"
                 "        return users[user_id]\n"
@@ -437,8 +477,13 @@ TASKS: list[EvalTask] = [
         task_id="quality-04",
         category="quality",
         task_text=(
-            "Implement classify_order(total, is_member, has_coupon, in_stock) -> str "
-            "returning 'rejected' if not in_stock, else a discount tier based on the other flags."
+            "Implement classify_order(total, is_member, has_coupon, in_stock) -> str. Return "
+            "'rejected' when not in_stock. Otherwise an order is high-value when total is "
+            "strictly greater than 100, and the tier is: members with a coupon get "
+            "'vip_discount' when high-value and 'member_coupon_discount' otherwise; members "
+            "without a coupon get 'member_discount' when high-value and 'member_standard' "
+            "otherwise; non-members get 'coupon_discount' with a coupon and 'standard' "
+            "without. Define the high-value threshold once as a single named constant."
         ),
         expected_defect_category="CODE-QUALITY",
         broken_files={
@@ -493,7 +538,9 @@ TASKS: list[EvalTask] = [
             "get a 15% discount off the base price, no other adjustments. Raise ValueError "
             "if age or base_price is negative."
         ),
-        expected_defect_category="CODE-QUALITY",
+        # v2: was CODE-QUALITY. The broken variant omits an explicitly required ValueError,
+        # which is a missing stated requirement -- a CORRECTNESS defect, not a style one.
+        expected_defect_category="CORRECTNESS",
         broken_files={
             "solution.py": (
                 "def compute_ticket_price(age: int, base_price: float) -> float:\n"
@@ -678,6 +725,124 @@ def _build_cases(tasks: list[EvalTask]) -> list[EvalCase]:
 
 
 CASES: list[EvalCase] = _build_cases(TASKS)
+
+
+# ------------------------------------------------------------- benchmark v1 archive
+#
+# Benchmark v1 stays constructible so historical runs remain interpretable and so a
+# v1-vs-v2 inventory diff can be computed without git archaeology. Only the six tasks v2
+# changed are stored; everything else is shared with TASKS by reference, so this archive
+# cannot drift from v1 for the unchanged 14 tasks -- they are the same objects.
+
+_TASKS_BY_ID: dict[str, EvalTask] = {t.task_id: t for t in TASKS}
+
+_V1_TASKS_CHANGED: dict[str, EvalTask] = {
+    # CLARIFY_TASK: "within 0.01" did not fix the inclusive/exclusive boundary.
+    "correctness-02": replace(
+        _TASKS_BY_ID["correctness-02"],
+        task_text=(
+            "Implement is_close_enough(a, b) -> bool that returns True if two floats are "
+            "close enough to be considered equal for currency comparison (within 0.01)."
+        ),
+    ),
+    # A-3 CLARIFY_TASK + REPAIR_FIXTURE: v1 exposed a bool-only contract whose caller had to
+    # resolve the host a second time, and a clean variant that checked one IPv4 address.
+    "security-04": replace(
+        _TASKS_BY_ID["security-04"],
+        task_text=(
+            "Implement is_safe_fetch_target(host) -> bool used to guard a URL-preview "
+            "feature against fetching internal/private network addresses (SSRF)."
+        ),
+        broken_files={
+            "solution.py": (
+                "def is_safe_fetch_target(host: str) -> bool:\n"
+                "    return True\n"
+            )
+        },
+        clean_files={
+            "solution.py": (
+                "import ipaddress\n"
+                "import socket\n\n\n"
+                "def is_safe_fetch_target(host: str) -> bool:\n"
+                "    try:\n"
+                "        addr = socket.gethostbyname(host)\n"
+                "        ip = ipaddress.ip_address(addr)\n"
+                "    except (OSError, ValueError):\n"
+                "        return False\n"
+                "    return not (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved)\n"
+            )
+        },
+    ),
+    # CLARIFY_TASK: no single-source requirement, and a loose email rule.
+    "quality-02": replace(
+        _TASKS_BY_ID["quality-02"],
+        task_text=(
+            "Implement validate_signup(email, age) and validate_profile_update(email, age), "
+            "each returning True if email contains '@' with a '.' after it, and age is 13-120."
+        ),
+    ),
+    # A-1 CLARIFY_TASK + REPAIR_FIXTURE: v1 stated no ordering-rule requirement, and the
+    # broken variant differed from the clean one only by inlining and verbosity.
+    "quality-01": replace(
+        _TASKS_BY_ID["quality-01"],
+        task_text=(
+            "Implement build_leaderboard(matches) where matches is a list of (player, points) "
+            "tuples: total each player's points and return one row per player as "
+            "{'rank': int, 'player': str, 'points': int}, ordered by total points descending "
+            "with ties broken by player name ascending, ranks starting at 1."
+        ),
+        broken_files={
+            "solution.py": (
+                "def build_leaderboard(matches: list[tuple[str, int]]) -> list[dict[str, object]]:\n"
+                "    totals: dict[str, int] = {}\n"
+                "    for player, points in matches:\n"
+                "        if player in totals:\n"
+                "            totals[player] = totals[player] + points\n"
+                "        else:\n"
+                "            totals[player] = points\n"
+                "    ordered = sorted(totals, key=lambda name: (-totals[name], name))\n"
+                "    rows: list[dict[str, object]] = []\n"
+                "    for rank, player in enumerate(ordered, start=1):\n"
+                "        rows.append({\"rank\": rank, \"player\": player, \"points\": totals[player]})\n"
+                "    return rows\n"
+            )
+        },
+    ),
+    # A-2 CLARIFY_TASK + REPAIR_FIXTURE: v1 prescribed no function name and no single-
+    # definition requirement, so the pair differed only by one identifier.
+    "quality-03": replace(
+        _TASKS_BY_ID["quality-03"],
+        task_text=(
+            "Implement a function that returns an existing user dict from a users-by-id "
+            "dict if present, otherwise creates and stores a new default user record."
+        ),
+        broken_files={
+            "solution.py": (
+                "DEFAULT_USER_NAME = \"New User\"\n\n\n"
+                "def get_user(users: dict[int, dict[str, str]], user_id: int) -> dict[str, str]:\n"
+                "    if user_id in users:\n"
+                "        return users[user_id]\n"
+                "    new_user = {\"name\": DEFAULT_USER_NAME}\n"
+                "    users[user_id] = new_user\n"
+                "    return new_user\n"
+            )
+        },
+    ),
+    # CLARIFY_TASK: no tier table and no named-constant requirement.
+    "quality-04": replace(
+        _TASKS_BY_ID["quality-04"],
+        task_text=(
+            "Implement classify_order(total, is_member, has_coupon, in_stock) -> str "
+            "returning 'rejected' if not in_stock, else a discount tier based on the other flags."
+        ),
+    ),
+    # FIX_EXPECTED_CATEGORY: v1 filed a missing required ValueError as CODE-QUALITY.
+    "quality-05": replace(_TASKS_BY_ID["quality-05"], expected_defect_category="CODE-QUALITY"),
+}
+
+TASKS_V1: list[EvalTask] = [_V1_TASKS_CHANGED.get(t.task_id, t) for t in TASKS]
+
+CASES_V1: list[EvalCase] = _build_cases(TASKS_V1)
 
 
 def validate_dataset(cases: list[EvalCase]) -> list[str]:

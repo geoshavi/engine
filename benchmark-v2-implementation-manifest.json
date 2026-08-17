@@ -1,0 +1,291 @@
+{
+  "schema_version": "benchmark-v2-implementation-manifest-v2",
+  "status": "BENCHMARK_V2_IMPLEMENTED_READY_FOR_REVIEW",
+  "supersedes": "benchmark-v2-implementation-manifest-v1 (pre-amendment; described quality-03 and security-04 as complete when they were not)",
+  "benchmark_version": {
+    "from": "v1",
+    "to": "v2"
+  },
+  "dataset_version": {
+    "from": "v3",
+    "to": "v4"
+  },
+  "controlling_records_verified": [
+    {
+      "file": "benchmark-v2-formal-adjudication.json",
+      "sha256": "113919f3dc2c1c3dd445f830575e67516d85f05d97d6860744cd99fac91ab3e7",
+      "bytes": 44329,
+      "verified": "MATCH"
+    },
+    {
+      "file": "benchmark-v2-severity-policy-adjudication.json",
+      "sha256": "622fcb9b236739a0b4474d2819197702d86780951375a619852d3e45054f696f",
+      "bytes": 17582,
+      "verified": "MATCH"
+    }
+  ],
+  "amendments": [
+    {
+      "id": "A-1",
+      "case": "quality-01-broken",
+      "old_action": "REPAIR_FIXTURE",
+      "new_action": "CLARIFY_TASK + REPAIR_FIXTURE",
+      "kept": {
+        "expected_verdict": "UNVERIFIED",
+        "expected_defect_category": "CODE-QUALITY"
+      },
+      "necessary_because": "Under frozen P1/P3 a pure CODE-QUALITY defect blocks only via P1-a (needs a stated requirement; none adjudicated) or P1-b (routes to CORRECTNESS via P1-c, needing an unadjudicated category change). REPAIR_FIXTURE alone was unsatisfiable.",
+      "implemented": "Task adds 'Express that ordering rule in exactly one place: it must not be restated anywhere else in the module.' Broken fixture now writes the sort key twice; clean states it once. Output identical across probes."
+    },
+    {
+      "id": "A-2",
+      "case": "quality-03-broken",
+      "old_action": "REPAIR_FIXTURE",
+      "new_action": "CLARIFY_TASK + REPAIR_FIXTURE",
+      "necessary_because": "The first implementation changed only the task, leaving a naming-only mismatch as the supposed blocking defect and the fixture unrepaired - a material action change rejected by the conformance review.",
+      "implemented": "Task requires the single name get_or_create_user AND that the default record be built in exactly one place. Broken fixture now duplicates record construction across create_user and get_user. Behaviour unchanged."
+    },
+    {
+      "id": "A-3",
+      "case": "security-04-clean",
+      "old_action": "REPAIR_FIXTURE",
+      "new_action": "CLARIFY_TASK + REPAIR_FIXTURE",
+      "kept": {
+        "expected_verdict": "OK"
+      },
+      "necessary_because": "The task names SSRF, so P2-T1 fires and DNS rebinding is blocking. It cannot be closed inside a bool contract, and a contract change is a task change that REPAIR_FIXTURE alone did not authorise.",
+      "implemented": "Contract becomes resolve_safe_fetch_target(host) -> str | None, returning the checked address the caller must use without re-resolving. SSRF objective preserved verbatim; not narrowed to exclude rebinding.",
+      "withdrawn_claim": "The first implementation reclassified the residual rebinding exposure as advisory. That applied P2's default while ignoring P2-T1 and was a re-adjudication made without authority. Withdrawn."
+    }
+  ],
+  "policies_unchanged": {
+    "P1": true,
+    "P2": true,
+    "P3": true,
+    "note": "No blocking condition, trigger, default or verdict semantic was added, removed, reworded or reinterpreted. Amendments change case actions only."
+  },
+  "score_independence": {
+    "benchmark_runs_under_v2": 0,
+    "provider_calls": 0,
+    "state_db_opened": false,
+    "note": "No run outcome informed any amendment; each was derived from the frozen records plus fixture source. Two of three make the dataset harder."
+  },
+  "tracked_files_changed": [
+    "src/engine/eval/dataset.py"
+  ],
+  "changed_cases": {
+    "correctness-02-broken": {
+      "changed": [
+        "task_text"
+      ],
+      "v1_sha16": "143c8bd4d21c9ef8",
+      "v2_sha16": "46014f6d35d29d58",
+      "action_applied": "CLARIFY_TASK (pair-propagated)"
+    },
+    "correctness-02-clean": {
+      "changed": [
+        "task_text"
+      ],
+      "v1_sha16": "c38d35fc1803c223",
+      "v2_sha16": "6765a2013162f143",
+      "action_applied": "CLARIFY_TASK"
+    },
+    "quality-01-broken": {
+      "changed": [
+        "task_text",
+        "files"
+      ],
+      "v1_sha16": "e34d1384665731dd",
+      "v2_sha16": "e8948bf380973d1e",
+      "action_applied": "CLARIFY_TASK + REPAIR_FIXTURE (amendment A-1)"
+    },
+    "quality-01-clean": {
+      "changed": [
+        "task_text"
+      ],
+      "v1_sha16": "8fedea0608a79a1b",
+      "v2_sha16": "fb03f1d493d30f4b",
+      "action_applied": "CLARIFY_TASK (pair-propagated, amendment A-1)"
+    },
+    "quality-02-broken": {
+      "changed": [
+        "task_text"
+      ],
+      "v1_sha16": "5a11e3d3f1ea0e7d",
+      "v2_sha16": "09ffc210fd937756",
+      "action_applied": "CLARIFY_TASK"
+    },
+    "quality-02-clean": {
+      "changed": [
+        "task_text"
+      ],
+      "v1_sha16": "03b1340fc95ce1b3",
+      "v2_sha16": "15250502bea580de",
+      "action_applied": "CLARIFY_TASK (pair-propagated)"
+    },
+    "quality-03-broken": {
+      "changed": [
+        "task_text",
+        "files"
+      ],
+      "v1_sha16": "3d8837aa37937eb8",
+      "v2_sha16": "de920922b81d1a10",
+      "action_applied": "CLARIFY_TASK + REPAIR_FIXTURE (amendment A-2)"
+    },
+    "quality-03-clean": {
+      "changed": [
+        "task_text"
+      ],
+      "v1_sha16": "bf432bb21962c886",
+      "v2_sha16": "d81828465190a28d",
+      "action_applied": "CLARIFY_TASK (pair-propagated, amendment A-2)"
+    },
+    "quality-04-broken": {
+      "changed": [
+        "task_text"
+      ],
+      "v1_sha16": "b124b206e541f41b",
+      "v2_sha16": "fdf7c2598ff0fae5",
+      "action_applied": "CLARIFY_TASK"
+    },
+    "quality-04-clean": {
+      "changed": [
+        "task_text"
+      ],
+      "v1_sha16": "6d5fdae90c5c93cc",
+      "v2_sha16": "16f64d6f2d32d3e4",
+      "action_applied": "CLARIFY_TASK"
+    },
+    "quality-05-broken": {
+      "changed": [
+        "expected_defect_category"
+      ],
+      "v1_sha16": "46f86c8500f40c8f",
+      "v2_sha16": "0c676ceaec42a24f",
+      "action_applied": "FIX_EXPECTED_CATEGORY"
+    },
+    "security-04-broken": {
+      "changed": [
+        "task_text",
+        "files"
+      ],
+      "v1_sha16": "688ee0b2819c0769",
+      "v2_sha16": "51fc6f05f1bb6abc",
+      "action_applied": "CLARIFY_TASK + REPAIR_FIXTURE (pair-propagated, amendment A-3)"
+    },
+    "security-04-clean": {
+      "changed": [
+        "task_text",
+        "files"
+      ],
+      "v1_sha16": "fa756d47a25be289",
+      "v2_sha16": "03e8377216792caa",
+      "action_applied": "CLARIFY_TASK + REPAIR_FIXTURE (amendment A-3)"
+    }
+  },
+  "changed_case_count": 13,
+  "unresolved_actions": [],
+  "v1_preservation": {
+    "mechanism": "TASKS_V1 / CASES_V1 via _V1_TASKS_CHANGED overlay; unchanged tasks shared by object reference",
+    "archived_tasks": [
+      "correctness-02",
+      "security-04",
+      "quality-01",
+      "quality-02",
+      "quality-03",
+      "quality-04",
+      "quality-05"
+    ],
+    "v1_case_count": 40,
+    "v1_validates_clean": true,
+    "v1_identity_constants": {
+      "BENCHMARK_V1_VERSION": "v1",
+      "BENCHMARK_V1_DATASET_VERSION": "v3"
+    },
+    "status": "PRESERVED"
+  },
+  "deterministic_validation": {
+    "checks_total": 47,
+    "checks_failed": 0,
+    "results": {
+      "v2_case_count_40": "PASS",
+      "v1_case_count_40": "PASS",
+      "v2_ids_unique": "PASS",
+      "v2_validate_clean": "PASS",
+      "v1_validate_clean": "PASS",
+      "v1_v2_inventory_identical": "PASS",
+      "versions": "PASS",
+      "v1_identity": "PASS",
+      "pair_task_text_shared": "PASS",
+      "category_enum_valid": "PASS",
+      "verdict_polarity": "PASS",
+      "v1_q01_broken_is_original": "PASS",
+      "v1_q03_broken_is_original": "PASS",
+      "v1_s04_is_original": "PASS",
+      "A1_task_states_requirement_generally": "PASS",
+      "A1_task_prescribes_no_implementation": "PASS",
+      "A1_broken_restates_ordering_rule": "PASS",
+      "A1_clean_states_ordering_rule_once": "PASS",
+      "A1_not_a_hidden_correctness_test": "PASS",
+      "A2_task_states_single_definition": "PASS",
+      "A2_broken_duplicates_record_construction": "PASS",
+      "A2_clean_builds_record_once": "PASS",
+      "A2_defect_is_beyond_naming": "PASS",
+      "A2_broken_violates_required_name": "PASS",
+      "A2_clean_uses_required_name": "PASS",
+      "A2_not_a_hidden_correctness_test": "PASS",
+      "A3_task_states_pinning_contract": "PASS",
+      "A3_ssrf_objective_not_weakened": "PASS",
+      "A3_no_bool_only_contract": "PASS",
+      "A3_public_returns_address": "PASS",
+      "A3_loopback_rejected": "PASS",
+      "A3_private_rejected": "PASS",
+      "A3_multi_address_rejected": "PASS",
+      "A3_ipv6_loopback_rejected": "PASS",
+      "A3_ipv6_ula_rejected": "PASS",
+      "A3_dualstack_rejected": "PASS",
+      "A3_metadata_rejected": "PASS",
+      "A3_multicast_rejected": "PASS",
+      "A3_unspecified_rejected": "PASS",
+      "A3_empty_resolution_fails_closed": "PASS",
+      "A3_rebinding_closed": "PASS",
+      "A3_returned_address_was_checked": "PASS",
+      "A3_broken_preserves_contrast": "PASS",
+      "c02_untouched_by_amendment": "PASS",
+      "q05_category_still_correctness": "PASS",
+      "q02_q04_unchanged_by_amendment": "PASS",
+      "changed_case_count_13": "PASS"
+    },
+    "rebinding_check": "A3_rebinding_closed - resolver returns a public address, fixture pins it, resolver is then flipped to a private answer, pinned value unaffected",
+    "p1a_grounding_check": "A1_task_states_requirement_generally / A2_task_states_single_definition - the requirement is readable from task text alone, not hidden benchmark intent",
+    "provider_or_api_calls": 0,
+    "network_access": "none (socket.getaddrinfo monkeypatched)",
+    "benchmark_run": false
+  },
+  "repository_gates": {
+    "ruff": "clean",
+    "mypy": "clean (44 source files)",
+    "pytest": "143 passed",
+    "fixture_snippets": "40/40 ruff clean and mypy clean when each case workspace is checked individually"
+  },
+  "deferred_not_implemented": [
+    "DF-1 mypy empty-output / ambiguous ok sentinel and lost returncode diagnostics",
+    "DF-2 400-character reconciliation rationale limit causing fail-closed responses"
+  ],
+  "methodological_scope": {
+    "independently_blind_adjudicated_cases": 9,
+    "selection_of_those_nine_was_blind": false,
+    "remaining_cases_retained_from_informed_audit_without_independent_blind_validation": 31,
+    "forbidden_description": "a fully independently validated 40-case dataset"
+  },
+  "git": {
+    "head": "d856d7296ba656a8b2719f0e253a091fdfcdf592",
+    "head_changed": false,
+    "committed": false,
+    "pushed": false,
+    "pr_created": false,
+    "pre_existing_untracked": [
+      "DEFERRED_FIXES.md (not modified)"
+    ]
+  }
+}
