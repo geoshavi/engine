@@ -1,5 +1,10 @@
 # engine
 
+<!-- Header/architecture image placeholder. Drop the diagram at
+     docs/assets/architecture-overview.png and replace this comment with:
+     ![Architecture overview](docs/assets/architecture-overview.png)
+     No image file exists in the repository yet, so none is referenced. -->
+
 AI agent orchestration engine: an orchestrator analyzes a task, builds a
 validated execution plan, dispatches specialized sub-agents under enforced
 token/spend limits, then runs their output through a multi-layer verification
@@ -10,7 +15,7 @@ pipeline (automated gates + independent LLM-judge review) before accepting it.
 Working runtime: single provider (Anthropic), sequential multi-agent execution
 (coding / research / testing / refactoring), bounded retry loop, automated gates
 (ruff/mypy/pytest) + 3-lens LLM-judge review, deterministic verdict, SQLite run
-history and per-call metrics. 77 tests.
+history and per-call metrics. 153 tests.
 
 Every LLM call in the codebase — agents and judge lenses alike — routes through
 a single gateway (`runtime/gateway.py`) that enforces a token/spend budget
@@ -30,9 +35,10 @@ model-free Python function — `verification/verdict.py`'s `merge`/`gate` — is
 the only code path allowed to turn automated gate results + those defects into
 an `OK`/`UNVERIFIED` verdict: any CRITICAL/HIGH defect blocks, any malformed
 judge response blocks (fails closed), and any failed automated gate blocks.
-This separation (deterministic script owns the verdict, LLMs only supply
-evidence) follows the pattern used by
-[kimi-atlas](https://github.com/null0xxx/kimi-atlas)'s verification harness.
+This separation -- deterministic script owns the verdict, LLMs only supply
+evidence -- was inspired by the verification harness in
+[kimi-atlas](https://github.com/null0xxx/kimi-atlas). The implementation here is
+this project's own.
 
 ### Runtime control
 
@@ -52,6 +58,85 @@ provider SDKs may only be imported inside `runtime/` and `providers/`; only
 `runtime/gateway.py` may reach into `providers/`; and `providers/` may not
 import `runtime/`. These fail with the offending file and the rule it broke,
 so the gateway cannot be quietly bypassed by future code.
+
+## Benchmark
+
+The verification pipeline is measured against a project-specific suite,
+`engine-review-benchmark` v2 (`src/engine/eval/dataset.py`). **It is not an
+industry-standard external benchmark** — it exists to make changes to this
+engine falsifiable, not to compare this engine with others.
+
+**Methodology.** 20 hand-written tasks × 2 variants = **40 cases**: 20 *clean*
+(a correct solution, expected verdict `OK`) and 20 *broken* (one genuine
+semantic, security or structural defect, expected `UNVERIFIED`). Ten cases each
+in correctness, security, code-quality and edge-case. Every snippet is authored
+to be `ruff`- and `mypy`-clean on its own merits, so a failed automated gate can
+never be mistaken for a judge decision, and the suite deliberately mixes obvious
+anchors (SQL injection, mutable default argument) with subtle ones (weak
+randomness, SSRF, timing-attack comparison, Unicode truncation, non-atomic
+increment) so it tests generalization rather than keyword matching.
+
+**Result** — five runs at the same commit, dataset frozen:
+
+| | |
+| --- | --- |
+| Scores | **36, 35, 35, 35, 35** |
+| Mean | **35.2 / 40 = 88.0%** |
+| Sample SD | **0.447** |
+| False passes (broken code accepted) | **0 / 100** broken-case observations |
+| Deterministic cases | 39 of 40 |
+
+Run it with `engine bench` (`--dry-run` validates the dataset and prints the cost
+plan without making a single API call).
+
+### Safety philosophy
+
+**A false pass is worse than a false alarm.** Accepting broken code silently
+defeats the point of the pipeline; flagging correct code wastes a review. The
+verdict path is fail-closed everywhere — a malformed judge response, a failed
+automated gate, or any CRITICAL/HIGH defect all block.
+
+That preference is not just stated, it is enforced by what has been *rejected*.
+Four separate interventions raised or promised to raise the score and were
+reverted once the evidence arrived:
+
+| Intervention | Why it was reverted |
+| --- | --- |
+| Severity reordering (emit severity after the analysis) | +3 cases, but bought with false-pass exposure |
+| Verdict normalization | 2 false passes in a single run |
+| Demonstrability prompt (“name the input that shows the defect”) | the model fabricated plausible inputs that were simply false |
+| Executed-witness verification | **26 false passes in 100 broken-case observations** |
+
+The engine shipped here is the one that never accepted broken code, not the one
+that scored highest. Each attempt is written up in its own `PHASE8*.md` artifact,
+including the measurements that killed it.
+
+### Known limitations
+
+- **Four clean cases fail consistently** (`correctness-02-clean`,
+  `security-02-clean`, `security-04-clean`, `edge_case-03-clean`), which caps this
+  configuration at 36/40. The judge blocks them on claims that are factually
+  wrong, spec-irrelevant, or an implementation preference. A read-only analysis
+  (`PHASE8E0_SAFE_IMPROVEMENT_SELECTION.md`) found no general, deterministic fix
+  that does not also risk accepting their broken twins, so the search was stopped
+  rather than continued unsafely.
+- **`edge_case-04-clean` is variable** (1/5) — it flips on a single defect
+  crossing the MEDIUM/HIGH boundary, and is the sole source of run-to-run score
+  variance.
+- **Judge lens calls are capped at `max_tokens=800`.** On the largest fixture a
+  response occasionally truncates, which fails closed to `UNVERIFIED`. Raising it
+  is a cost and comparability trade-off, not a free fix, so it is left as a known
+  operational limit.
+- **Single provider** (Anthropic) and sequential execution.
+
+## Developer tooling: dependency graph
+
+`tools/research_graph.py` renders a local architecture/dependency view of the
+codebase into `graphify-out/` (`graph.html`, `graph.json`, `GRAPH_REPORT.md`).
+Open `graphify-out/graph.html` in a browser to explore module relationships.
+
+It is a **developer aid only** — it is gitignored, plays no part in the
+verification pipeline, and has no influence on any verdict or benchmark score.
 
 ## Setup
 
