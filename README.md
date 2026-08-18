@@ -1,3 +1,6 @@
+<img width="1536" height="1024" alt="Codex Image 18 Aug 2026, 01_52_58" src="https://github.com/user-attachments/assets/8828b75a-f555-48cd-bfa3-5f5f38dc1c08" />
+
+
 # engine
 
 <!-- Header/architecture image placeholder. Drop the diagram at
