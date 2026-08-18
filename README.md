@@ -29,12 +29,24 @@ are planned for later milestones.
 ### Verification architecture
 
 No LLM ever decides pass/fail directly. Each judge lens (`verification/judge.py`)
-must return structured defects (`{id, category, severity, location, fix}`) as
-JSON, validated against a fixed schema (`verification/schema.py`). A pure,
-model-free Python function — `verification/verdict.py`'s `merge`/`gate` — is
-the only code path allowed to turn automated gate results + those defects into
-an `OK`/`UNVERIFIED` verdict: any CRITICAL/HIGH defect blocks, any malformed
-judge response blocks (fails closed), and any failed automated gate blocks.
+must return structured defects as JSON, validated against a fixed schema
+(`verification/schema.py`). A defect is exactly
+`{id, category, severity, location, fix}`; `category` must be one of
+**CORRECTNESS**, **SECURITY** or **CODE-QUALITY**, and `severity` one of
+CRITICAL / HIGH / MEDIUM / LOW. There is no confidence score and no free-form
+evidence field — a defect the schema does not accept is not a defect.
+
+A pure, model-free Python function — `verification/verdict.py`'s `merge`/`gate`
+— is the only code path allowed to produce an `OK`/`UNVERIFIED` verdict. The
+validated defects from all three lenses are merged into one list, and then:
+
+- **any CRITICAL or HIGH defect blocks** the verdict (`UNVERIFIED`);
+- **MEDIUM and LOW findings never block** — they are reported, not gating;
+- a **malformed judge response blocks** (fails closed);
+- a **failed automated gate blocks**.
+
+Severity decides the outcome. The `verdict` string a lens returns is validated
+for self-consistency but never overrides the severities it was derived from.
 This separation -- deterministic script owns the verdict, LLMs only supply
 evidence -- was inspired by the verification harness in
 [kimi-atlas](https://github.com/null0xxx/kimi-atlas). The implementation here is
@@ -85,6 +97,8 @@ increment) so it tests generalization rather than keyword matching.
 | Sample SD | **0.447** |
 | False passes (broken code accepted) | **0 / 100** broken-case observations |
 | Deterministic cases | 39 of 40 |
+| Stable clean failures | 4 cases at 0/5 |
+| Variable clean case | `edge_case-04-clean` at 1/5 — the only source of score variance |
 
 Run it with `engine bench` (`--dry-run` validates the dataset and prints the cost
 plan without making a single API call).
