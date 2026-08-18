@@ -132,6 +132,6 @@ These are hard constraints, not preferences.
 
 ## Before proposing any experiment
 
-Read the current BASELINE.md and confirm the baseline you are comparing against is a
+Read the current `docs/benchmark/BASELINE.md` and confirm the baseline you are comparing against is a
 *measured rate at the current configuration*, not an assumption inherited from an earlier
 dataset version. If the baseline does not exist yet, the first experiment is to measure it.

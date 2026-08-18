@@ -24,7 +24,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = REPO_ROOT / ".engine" / "state.db"
-BASELINE_PATH = REPO_ROOT / "BASELINE.md"
+BASELINE_PATH = REPO_ROOT / "docs" / "benchmark" / "BASELINE.md"
 VAULT_DIR = REPO_ROOT / "research-vault"
 
 # --- Chain of hub notes, in lineage order -----------------------------------

@@ -5,7 +5,7 @@ description: Governs how BASELINE.md is read and extended for engine-review-benc
 
 # Baseline Evidence
 
-`BASELINE.md` is the project's evidence log. It is the reason past runs still mean
+`docs/benchmark/BASELINE.md` is the project's evidence log. It is the reason past runs still mean
 something. Treat it accordingly.
 
 ## Append-mostly

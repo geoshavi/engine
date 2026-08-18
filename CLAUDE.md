@@ -2,7 +2,7 @@
 
 The skills in `.claude/skills/` are authoritative and this file does not modify them:
 **git-safety** (tree state, measured path, approvals), **experiment-design**
-(pre-registration), **baseline-evidence** (BASELINE.md), **benchmark-analysis**
+(pre-registration), **baseline-evidence** (docs/benchmark/BASELINE.md), **benchmark-analysis**
 (`.engine/state.db`). Superpowers skills likewise stand as written. Where anything below
 appears to conflict with one of them, the skill wins.
 

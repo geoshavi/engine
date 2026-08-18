@@ -120,7 +120,7 @@ reverted once the evidence arrived:
 | Executed-witness verification | **26 false passes in 100 broken-case observations** |
 
 The engine shipped here is the one that never accepted broken code, not the one
-that scored highest. Each attempt is written up in its own `PHASE8*.md` artifact,
+that scored highest. Each attempt is written up in its own `docs/experiments/PHASE8*.md` artifact,
 including the measurements that killed it.
 
 ### Known limitations
@@ -129,7 +129,7 @@ including the measurements that killed it.
   `security-02-clean`, `security-04-clean`, `edge_case-03-clean`), which caps this
   configuration at 36/40. The judge blocks them on claims that are factually
   wrong, spec-irrelevant, or an implementation preference. A read-only analysis
-  (`PHASE8E0_SAFE_IMPROVEMENT_SELECTION.md`) found no general, deterministic fix
+  (`docs/experiments/PHASE8E0_SAFE_IMPROVEMENT_SELECTION.md`) found no general, deterministic fix
   that does not also risk accepting their broken twins, so the search was stopped
   rather than continued unsafely.
 - **`edge_case-04-clean` is variable** (1/5) — it flips on a single defect
@@ -140,6 +140,13 @@ including the measurements that killed it.
   is a cost and comparability trade-off, not a free fix, so it is left as a known
   operational limit.
 - **Single provider** (Anthropic) and sequential execution.
+
+## Project documentation
+
+- `docs/benchmark/` — benchmark design, amendments, changelog, historical baseline
+- `docs/experiments/` — pre-registered experiments and rejected intervention evidence
+- `FINAL_PROJECT_STATUS.md` — release-candidate summary
+- `DEFERRED_FIXES.md` — intentionally deferred engineering issues
 
 ## Developer tooling: dependency graph
 

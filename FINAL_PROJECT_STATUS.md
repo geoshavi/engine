@@ -137,7 +137,6 @@ No LLM decides pass/fail anywhere in this system.
 | **DF-3** — a failing judge lens discards critics already collected | Never fired in 4,680 recorded lens calls. Repair would change what `gate()` sees when a lens fails — a verdict-semantics decision, and the current behaviour is the fail-closed direction. Needs its own pre-registered phase (`DEFERRED_FIXES.md`) |
 | `max_tokens` tuning | Cost and comparability trade-off; needs its own pre-registration |
 | Multi-provider routing, parallel sub-agents, merge control, long-term memory | Planned milestones, never started |
-| Header/architecture image | `docs/assets/architecture-overview.png` is referenced only in a README comment. **No image file exists in the repository**; the placeholder is deliberate, not an oversight |
 
 ---
 

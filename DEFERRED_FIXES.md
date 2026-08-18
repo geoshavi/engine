@@ -4,8 +4,8 @@ Fixes that are diagnosed and specified but deliberately **not applied**, because
 them would change the measured path (`src/`) while a frozen measurement arm is open.
 
 This file is a work queue, not evidence and not a registration. It records no run and no
-result. Nothing here may be cited as a measured finding; see `BASELINE.md` for measured
-results and `PHASE5_REGISTRATION.md` for the arm currently frozen.
+result. Nothing here may be cited as a measured finding; see `docs/benchmark/BASELINE.md` for measured
+results and `docs/experiments/PHASE5_REGISTRATION.md` for the arm currently frozen.
 
 **Rule for every entry:** an entry may be implemented only after the frozen
 benchmark/dataset adjudication work it names is formally closed. Closing that work is a
@@ -20,7 +20,7 @@ separate, explicitly approved step. Implementing an entry early ends the arm.
 | DF-3 | **DEFERRED -- NOT APPLIED** | -- |
 
 Neither resolution reclassifies a historical run and neither changes Benchmark v2 dataset
-semantics. See `PHASE8A_INFRASTRUCTURE_CLEANUP.md`.
+semantics. See `docs/experiments/PHASE8A_INFRASTRUCTURE_CLEANUP.md`.
 
 ---
 
@@ -30,7 +30,7 @@ semantics. See `PHASE8A_INFRASTRUCTURE_CLEANUP.md`.
 `src/engine/verification/automated.py` at `_run`; see the *Closure* section at the end of
 this entry. Everything between here and that section is the original 2026-08-17 diagnosis,
 preserved unedited as the record of what was found and why.
-**Was blocked on:** formal closure of Phase 5A adjudication (see `PHASE5_REGISTRATION.md`).
+**Was blocked on:** formal closure of Phase 5A adjudication (see `docs/experiments/PHASE5_REGISTRATION.md`).
 **Location:** `src/engine/verification/automated.py`, in `_run` (the `detail` assignment).
 **Diagnosed:** 2026-08-17, by read-only inspection of `src/` and `.engine/state.db` at
 `d856d72`. No run, no provider call, and no file modification was part of the diagnosis.
