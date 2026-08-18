@@ -5,7 +5,7 @@ from collections.abc import Callable
 from engine.llm_types import Message
 from engine.runtime.budget import BudgetController
 from engine.runtime.gateway import LLMGateway
-from engine.verification.schema import enforce_critic_schema
+from engine.verification.schema import derive_verdict, enforce_critic_schema
 
 LENSES = {
     "correctness": (
@@ -112,6 +112,14 @@ def _parse_critic(response_text: str) -> tuple[dict, list[str]]:
     errors = enforce_critic_schema(parsed)
     if errors:
         return {}, errors
+    # Severities are authoritative; the model's "verdict" string is a duplicate
+    # of what they already say. Normalize it so no consumer can ever see the two
+    # disagree. Safe in both directions: a stale "FAIL" over softened findings
+    # becomes OK (the finding set genuinely holds nothing blocking), and an "OK"
+    # over a CRITICAL/HIGH finding becomes FAIL -- the string cannot rescue a
+    # blocker, and unlike the old schema rejection the blocking defect is now
+    # retained and blocks on its own merit in verdict.merge()/gate().
+    parsed["verdict"] = derive_verdict(parsed.get("defects"))
     return parsed, []
 
 

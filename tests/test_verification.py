@@ -52,15 +52,32 @@ def test_enforce_critic_schema_accepts_well_formed_critic() -> None:
     assert enforce_critic_schema(critic) == []
 
 
-def test_enforce_critic_schema_rejects_inconsistent_verdict() -> None:
+def test_inconsistent_verdict_cannot_rescue_a_blocking_defect() -> None:
+    """Updated in Phase 8C.1. This test previously asserted that a verdict
+    disagreeing with its severities is a *schema error*. That rule was retired:
+    it rejected the whole response -- discarding the lens's findings and failing
+    the case closed -- over a field verdict.merge()/gate() never read (6 of
+    Phase 8C's 7 schema failures were exactly that, in the harmless direction).
+
+    The safety property the test existed to protect is unchanged and is now
+    enforced more strongly: the CRITICAL defect is *retained* and blocks on its
+    own merit, instead of being thrown away with only the schema error blocking.
+    Asserting the outcome rather than the error message is the stricter check.
+    """
     critic = {
         "defects": [
             {"id": "C1", "category": "CORRECTNESS", "severity": "CRITICAL", "location": "x", "fix": "y"}
         ],
         "verdict": "OK",
     }
-    errors = enforce_critic_schema(critic)
-    assert any("verdict" in e for e in errors)
+    assert enforce_critic_schema(critic) == []
+
+    parsed, errors = _parse_critic(json.dumps(critic))
+    assert errors == []
+    assert parsed["verdict"] == "FAIL"
+    assert [d["severity"] for d in parsed["defects"]] == ["CRITICAL"]
+    merged = verdict.merge([parsed], [])
+    assert verdict.gate(merged, automated_passed=True, schema_errors=[]) == "UNVERIFIED"
 
 
 def test_enforce_critic_schema_rejects_non_dict() -> None:
@@ -677,3 +694,133 @@ def test_reorder_does_not_touch_fail_closed_on_schema_or_gate_failure() -> None:
     assert verdict.gate(clean, automated_passed=True, schema_errors=["judge:security: bad JSON"]) == "UNVERIFIED"
     assert verdict.gate(clean, automated_passed=False, schema_errors=[]) == "UNVERIFIED"
     assert verdict.gate(clean, automated_passed=True, schema_errors=[]) == "OK"
+
+
+# --- Phase 8C.1: severities are authoritative; the verdict string is derived ---
+#
+# Phase 8C moved `severity` after `fix`, and 6 of 7 resulting schema failures
+# were the same shape: the model softened every finding to MEDIUM/LOW after
+# writing its analysis but still emitted "verdict": "FAIL". enforce_critic_schema
+# rejected the response, judge.py discarded the critic, and gate() failed closed
+# -- over a field nothing downstream acts on. merge() and gate() have always
+# derived the outcome from severities alone.
+#
+# The rule is now explicit: severities decide, the verdict string is normalized
+# to match. A contradiction can never rescue a blocker -- verdict "OK" alongside
+# a HIGH defect now *keeps* that defect and blocks on it, where before the
+# defect was thrown away and only the schema error blocked.
+
+
+def _critic_json(defects: list[dict], verdict: str) -> str:
+    return json.dumps({"defects": defects, "verdict": verdict})
+
+
+def _d(severity: str, did: str = "C1", category: str = "CORRECTNESS") -> dict:
+    return {"id": did, "category": category, "location": "solution.py:2", "fix": "x", "severity": severity}
+
+
+def _gate_of(critic: dict) -> str:
+    return verdict.gate(verdict.merge([critic], []), automated_passed=True, schema_errors=[])
+
+
+def test_stale_fail_verdict_after_softening_is_accepted_and_normalized() -> None:
+    """(1) The exact Phase 8C regression: MEDIUM/LOW findings, model still says
+    FAIL. Must parse cleanly and resolve to a non-blocking outcome."""
+    critic, errors = _parse_critic(_critic_json([_d("MEDIUM"), _d("LOW", "C2")], "FAIL"))
+
+    assert errors == []
+    assert critic["verdict"] == "OK"
+    assert _gate_of(critic) == "OK"
+
+
+def test_no_defects_with_fail_verdict_is_accepted_and_normalized() -> None:
+    """(2) Nothing found, model still says FAIL."""
+    critic, errors = _parse_critic(_critic_json([], "FAIL"))
+
+    assert errors == []
+    assert critic["verdict"] == "OK"
+    assert _gate_of(critic) == "OK"
+
+
+def test_high_defect_with_ok_verdict_still_blocks() -> None:
+    """(3) The unsafe direction. The model's OK claim must never rescue a HIGH
+    finding -- and the finding itself must survive, not be discarded."""
+    critic, errors = _parse_critic(_critic_json([_d("HIGH")], "OK"))
+
+    assert errors == []
+    assert critic["verdict"] == "FAIL"
+    assert [d["severity"] for d in critic["defects"]] == ["HIGH"]
+    assert _gate_of(critic) == "UNVERIFIED"
+
+
+def test_critical_defect_with_ok_verdict_still_blocks() -> None:
+    """(4) Same, at CRITICAL."""
+    critic, errors = _parse_critic(_critic_json([_d("CRITICAL")], "OK"))
+
+    assert errors == []
+    assert critic["verdict"] == "FAIL"
+    assert _gate_of(critic) == "UNVERIFIED"
+
+
+def test_mixed_medium_and_high_with_ok_verdict_still_blocks() -> None:
+    """(5) A blocker must not be diluted by non-blocking siblings."""
+    critic, errors = _parse_critic(_critic_json([_d("MEDIUM"), _d("HIGH", "C2"), _d("LOW", "C3")], "OK"))
+
+    assert errors == []
+    assert critic["verdict"] == "FAIL"
+    assert _gate_of(critic) == "UNVERIFIED"
+
+
+def test_already_consistent_responses_are_unchanged() -> None:
+    """(6) The common path must keep behaving exactly as before."""
+    ok_critic, ok_errors = _parse_critic(_critic_json([_d("MEDIUM")], "OK"))
+    assert ok_errors == [] and ok_critic["verdict"] == "OK"
+    assert _gate_of(ok_critic) == "OK"
+
+    fail_critic, fail_errors = _parse_critic(_critic_json([_d("HIGH")], "FAIL"))
+    assert fail_errors == [] and fail_critic["verdict"] == "FAIL"
+    assert _gate_of(fail_critic) == "UNVERIFIED"
+
+
+def test_malformed_json_still_fails_closed() -> None:
+    """(7) Normalization must not become a swallow-everything path."""
+    _, truncated = _parse_critic('{"defects": [{"id": "C1", "severity": "HIGH"')
+    assert truncated != []
+
+    _, prose = _parse_critic("I could not review this file.")
+    assert prose == ["response did not contain a JSON object"]
+
+
+def test_invalid_severity_and_category_still_fail_closed() -> None:
+    """(8) Structural validation is untouched."""
+    _, sev_errors = _parse_critic(_critic_json([_d("BLOCKER")], "FAIL"))
+    assert any("severity" in e for e in sev_errors)
+
+    _, cat_errors = _parse_critic(_critic_json([_d("HIGH", category="PERFORMANCE")], "FAIL"))
+    assert any("category" in e for e in cat_errors)
+
+    _, key_errors = _parse_critic(json.dumps({"defects": [{"id": "C1", "severity": "HIGH"}], "verdict": "FAIL"}))
+    assert any("missing keys" in e for e in key_errors)
+
+
+def test_non_verdict_schema_errors_are_not_normalized_away() -> None:
+    """(9) A response carrying BOTH a verdict mismatch and a real structural
+    error must still be rejected on the structural error."""
+    critic, errors = _parse_critic(_critic_json([_d("BLOCKER")], "FAIL"))
+
+    assert errors != []
+    assert critic == {}
+
+
+def test_verdict_field_must_still_be_ok_or_fail() -> None:
+    """The enum check survives -- only the cross-consistency rule was retired."""
+    _, errors = _parse_critic(_critic_json([_d("MEDIUM")], "MAYBE"))
+    assert any("verdict" in e for e in errors)
+
+    _, missing = _parse_critic(json.dumps({"defects": []}))
+    assert any("verdict" in e for e in missing)
+
+
+def test_stray_top_level_keys_still_rejected() -> None:
+    _, errors = _parse_critic(json.dumps({"defects": [], "verdict": "OK", "confidence": 0.9}))
+    assert any("unexpected top-level keys" in e for e in errors)

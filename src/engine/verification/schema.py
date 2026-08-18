@@ -3,6 +3,24 @@ from typing import Any
 from engine.verification.rubric import BLOCKING, CRITIC_KEYS, DEFECT_KEYS, DIMENSIONS, SEVERITIES
 
 
+def derive_verdict(defects: Any) -> str:
+    """The authoritative verdict rule: any CRITICAL/HIGH defect means FAIL.
+
+    Single source of truth for "does this set of findings block". The model
+    also emits a "verdict" string, but it is a duplicate of information the
+    severities already carry and is normalized to this value after parsing --
+    an LLM-supplied string must never be able to override the structured
+    severity evidence, in either direction.
+    """
+    if not isinstance(defects, list):
+        return "OK"
+    return (
+        "FAIL"
+        if any(isinstance(d, dict) and d.get("severity") in BLOCKING for d in defects)
+        else "OK"
+    )
+
+
 def enforce_critic_schema(critic: Any) -> list[str]:
     errs: list[str] = []
 
@@ -42,13 +60,18 @@ def enforce_critic_schema(critic: Any) -> list[str]:
     verdict = critic.get("verdict")
     if verdict not in ("OK", "FAIL"):
         errs.append("verdict: must be 'OK' or 'FAIL'")
-    else:
-        has_blocking = any(
-            isinstance(d, dict) and d.get("severity") in BLOCKING for d in defects
-        )
-        expected = "FAIL" if has_blocking else "OK"
-        if verdict != expected:
-            errs.append(f"verdict: is {verdict!r} but expected {expected!r} given the defects")
+    # A verdict that disagrees with its own defect severities is NOT an error.
+    # Severities are authoritative -- verdict.merge() and verdict.gate() have
+    # always decided on severity alone and never read this field, so the string
+    # carries no downstream authority. Rejecting the whole response over it
+    # discarded a lens's entire findings and failed the case closed (Phase 8C:
+    # 6 of 7 schema failures were exactly this, after severities correctly
+    # softened to MEDIUM/LOW but a stale "FAIL" was still emitted).
+    # _parse_critic() normalizes the field to derive_verdict() instead, so no
+    # consumer ever sees a contradictory value. The unsafe direction stays
+    # safe by construction: "OK" alongside a HIGH defect now *keeps* that
+    # defect and blocks on it, where before the defect was thrown away and
+    # only the schema error blocked.
 
     stray = set(critic.keys()) - CRITIC_KEYS
     if stray:
