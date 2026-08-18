@@ -1,12 +1,17 @@
 <img width="1536" height="1024" alt="Codex Image 18 Aug 2026, 02_02_06" src="https://github.com/user-attachments/assets/2a0ebb51-9018-4186-a65c-1813ea00c6a8" />
 
 
-# engine
+# AgentGate
 
-AI agent orchestration engine: an orchestrator analyzes a task, builds a
-validated execution plan, dispatches specialized sub-agents under enforced
-token/spend limits, then runs their output through a multi-layer verification
-pipeline (automated gates + independent LLM-judge review) before accepting it.
+AgentGate is an AI agent orchestration engine: an orchestrator analyzes a
+task, builds a validated execution plan, dispatches specialized sub-agents
+under enforced token/spend limits, then runs their output through a
+multi-layer verification pipeline (automated gates + independent LLM-judge
+review) before accepting it.
+
+AgentGate is the project name only. The Python package, the `engine` CLI
+command, runtime paths (`.engine/`) and the `engine-review-benchmark` suite
+keep their existing names.
 
 ## Status
 

@@ -1,4 +1,4 @@
-# Final Project Status
+# AgentGate — Final Project Status
 
 Release candidate. Accuracy optimization is closed.
 
