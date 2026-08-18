@@ -5,7 +5,7 @@ from pathlib import Path
 from engine.runtime.budget import BudgetController
 from engine.runtime.gateway import LLMGateway
 from engine.state.models import VerificationResult
-from engine.verification import verdict, witness
+from engine.verification import verdict
 from engine.verification.automated import automated_defects, run_automated_gates
 from engine.verification.judge import run_judge_gates
 
@@ -61,9 +61,6 @@ def run_verification(
     )
 
     merged = verdict.merge(critic_outputs, script_defects)
-    # Refutation-only: this can demote a blocking defect whose own witness
-    # execution contradicts it, and can do nothing else. See witness.py.
-    merged = witness.apply_witness_verification(merged, workspace)
     if schema_errors:
         merged = {**merged, "schema_errors": schema_errors}
     status = verdict.gate(merged, automated_passed, schema_errors)

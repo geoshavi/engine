@@ -478,7 +478,13 @@ def _run_pipeline(tmp_path: Path, response: str) -> str:
     return status
 
 
-def test_end_to_end_a_refuted_blocker_opens_the_gate(tmp_path: Path) -> None:
+def test_end_to_end_the_witness_layer_is_not_wired_into_the_pipeline(tmp_path: Path) -> None:
+    """Phase 8D.2C rejected the mechanism: it caused 26 false passes in 100
+    broken-case observations because the model wrote the REQUIRED behaviour into
+    `expect` while the classifier read it as the OBSERVED behaviour. The layer is
+    kept and tested, but no longer reaches a verdict -- a refutable witness must
+    now leave the blocker exactly where the critic filed it.
+    """
     critic = json.dumps(
         {
             "defects": [
@@ -498,7 +504,7 @@ def test_end_to_end_a_refuted_blocker_opens_the_gate(tmp_path: Path) -> None:
             "verdict": "FAIL",
         }
     )
-    assert _run_pipeline(tmp_path, critic) == "OK"
+    assert _run_pipeline(tmp_path, critic) == "UNVERIFIED"
 
 
 def test_end_to_end_an_unwitnessed_blocker_still_closes_the_gate(tmp_path: Path) -> None:
