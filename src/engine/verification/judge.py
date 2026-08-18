@@ -42,6 +42,12 @@ RESPONSE_INSTRUCTION = (
     "category must be exactly one of CORRECTNESS, SECURITY, or CODE-QUALITY — use the "
     "closest match, never invent a more specific label. "
     "Return {\"defects\": [], \"verdict\": \"OK\"} if you find nothing to flag."
+    " A CRITICAL or HIGH defect may carry a \"witness\": one call that shows it, as "
+    '{"call": "<a function defined in the reviewed code>", "args": [JSON values], '
+    '"expect": {"returns": <JSON value>}} -- or "expect": {"raises": "<ExceptionName>"} '
+    "if the call fails instead. Arguments and returned values must be plain JSON "
+    "literals. Leave the witness out when the defect does not fit that form; many do "
+    "not."
 )
 
 
