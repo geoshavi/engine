@@ -10,7 +10,12 @@ from engine.state import db
 from engine.state.models import EvalCaseResult, VerificationResult
 from engine.verification import pipeline, verdict
 from engine.verification.automated import _run, automated_defects, run_automated_gates
-from engine.verification.judge import _extract_json_objects, _parse_critic, run_judge_gates
+from engine.verification.judge import (
+    RESPONSE_INSTRUCTION,
+    _extract_json_objects,
+    _parse_critic,
+    run_judge_gates,
+)
 from engine.verification.schema import enforce_critic_schema
 
 
@@ -570,3 +575,105 @@ def test_silent_failure_detail_round_trips_through_the_gate_record(tmp_path: Pat
         stored = db.get_eval_case_automated_gates(conn, case_result_id)
 
     assert stored == [VerificationResult("mypy", False, "(no output, exit 2)")]
+
+
+# --- Phase 8C: severity is committed after the analysis, not before it ---
+#
+# Phase 8B's autopsy found five blocking defects across two clean cases whose
+# own `fix` text retracts the finding -- "No defect here.", "already done
+# correctly", "while blocked by the current checks", "so this is actually
+# correct behavior". The model reaches the right conclusion while writing
+# `fix`, but `severity` was already emitted three keys earlier and never
+# revised, so verdict.gate() fails closed on a finding the model itself
+# withdrew.
+#
+# The contract now orders the keys so `severity` is generated after `fix`.
+# Nothing is suppressed: a blocking severity still blocks, unconditionally.
+
+
+def test_response_contract_emits_severity_after_the_fix_analysis() -> None:
+    """Autoregressive order is the mechanism: a key generated earlier cannot be
+    conditioned on text written later. `severity` must come after `fix`."""
+    assert '"fix"' in RESPONSE_INSTRUCTION and '"severity"' in RESPONSE_INSTRUCTION
+    assert RESPONSE_INSTRUCTION.index('"fix"') < RESPONSE_INSTRUCTION.index('"severity"')
+
+
+def _defect_in_contract_order(severity: str, fix: str, category: str = "CORRECTNESS") -> dict:
+    """A defect with keys inserted in the order the contract now asks for."""
+    return {"id": "C1", "category": category, "location": "solution.py:2", "fix": fix, "severity": severity}
+
+
+def test_schema_accepts_defect_keys_in_the_new_contract_order() -> None:
+    """DEFECT_KEYS is a set, so validation must be order-agnostic -- the reorder
+    must not turn well-formed responses into schema failures (which gate()
+    fails closed on, the exact outcome this change exists to reduce)."""
+    critic = {"defects": [_defect_in_contract_order("MEDIUM", "extract the constant")], "verdict": "OK"}
+    assert enforce_critic_schema(critic) == []
+
+
+def test_self_retracted_finding_scored_non_blocking_no_longer_blocks() -> None:
+    """POSITIVE case: the model's analysis concludes the code already handles
+    it, so severity lands at MEDIUM and the case is no longer failed closed."""
+    critic = {
+        "defects": [
+            _defect_in_contract_order(
+                "MEDIUM",
+                "subprocess.run() is already called with a list, so shell metacharacters "
+                "are not interpreted -- no defect here.",
+                category="SECURITY",
+            )
+        ],
+        "verdict": "OK",
+    }
+    assert enforce_critic_schema(critic) == []
+    merged = verdict.merge([critic], [])
+    assert merged["verdict"] == "OK"
+    assert verdict.gate(merged, automated_passed=True, schema_errors=[]) == "OK"
+
+
+def test_genuine_blocking_defect_still_fails_closed_under_the_new_order() -> None:
+    """NEGATIVE/counterexample: a real HIGH finding must still block. The
+    reorder changes when severity is chosen, never what a chosen severity does."""
+    critic = {
+        "defects": [
+            _defect_in_contract_order(
+                "HIGH", "the coupon branch is skipped for non-members; move it out of the else"
+            )
+        ],
+        "verdict": "FAIL",
+    }
+    assert enforce_critic_schema(critic) == []
+    merged = verdict.merge([critic], [])
+    assert merged["verdict"] == "FAIL"
+    assert verdict.gate(merged, automated_passed=True, schema_errors=[]) == "UNVERIFIED"
+
+
+def test_critical_defect_still_fails_closed_under_the_new_order() -> None:
+    critic = {
+        "defects": [_defect_in_contract_order("CRITICAL", "command is built by string concatenation")],
+        "verdict": "FAIL",
+    }
+    merged = verdict.merge([critic], [])
+    assert verdict.gate(merged, automated_passed=True, schema_errors=[]) == "UNVERIFIED"
+
+
+def test_one_blocking_defect_among_retracted_ones_still_blocks() -> None:
+    """The reorder must not let a real blocker hide behind non-blocking siblings."""
+    critic = {
+        "defects": [
+            _defect_in_contract_order("LOW", "naming nit"),
+            _defect_in_contract_order("MEDIUM", "already handled -- no defect here"),
+            _defect_in_contract_order("HIGH", "off-by-one rejects the last valid hour"),
+        ],
+        "verdict": "FAIL",
+    }
+    merged = verdict.merge([critic], [])
+    assert verdict.gate(merged, automated_passed=True, schema_errors=[]) == "UNVERIFIED"
+
+
+def test_reorder_does_not_touch_fail_closed_on_schema_or_gate_failure() -> None:
+    """Both non-defect paths into UNVERIFIED are untouched by this change."""
+    clean = verdict.merge([{"defects": [], "verdict": "OK"}], [])
+    assert verdict.gate(clean, automated_passed=True, schema_errors=["judge:security: bad JSON"]) == "UNVERIFIED"
+    assert verdict.gate(clean, automated_passed=False, schema_errors=[]) == "UNVERIFIED"
+    assert verdict.gate(clean, automated_passed=True, schema_errors=[]) == "OK"

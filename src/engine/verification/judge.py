@@ -35,9 +35,23 @@ LENSES = {
 RESPONSE_INSTRUCTION = (
     "\n\nRespond with ONLY a JSON object, no prose before or after, no markdown fences:\n"
     '{"defects": [{"id": "C1", "category": "CORRECTNESS|SECURITY|CODE-QUALITY", '
-    '"severity": "CRITICAL|HIGH|MEDIUM|LOW", '
-    '"location": "path:line or description", "fix": "what to change"}], '
+    '"location": "path:line or description", "fix": "what to change", '
+    '"severity": "CRITICAL|HIGH|MEDIUM|LOW"}], '
     '"verdict": "OK|FAIL"}\n'
+    # Key order is load-bearing, not cosmetic. Generation is left-to-right, so a
+    # key emitted before "fix" cannot be conditioned on the analysis written in
+    # "fix". With "severity" emitted first, findings were observed committing to
+    # CRITICAL/HIGH and then retracting themselves inside "fix" -- "no defect
+    # here", "already done correctly", "while blocked by the current checks" --
+    # and the retraction had nowhere to go, so gate() failed closed on a finding
+    # the model had itself withdrawn. Emitting "severity" last lets the
+    # conclusion govern the score instead of trailing it. This changes WHEN
+    # severity is chosen, never what a chosen severity does: CRITICAL/HIGH still
+    # blocks, unconditionally.
+    "Fill these keys in exactly the order shown. Put your analysis and the concrete change "
+    "in \"fix\", then choose \"severity\" last so it reflects the analysis you just wrote: if "
+    "what you wrote in \"fix\" concludes the supplied code already handles the case, "
+    "\"severity\" is not CRITICAL or HIGH. "
     "verdict must be 'FAIL' iff at least one defect has severity CRITICAL or HIGH, else 'OK'. "
     "category must be exactly one of CORRECTNESS, SECURITY, or CODE-QUALITY — use the "
     "closest match, never invent a more specific label. "
