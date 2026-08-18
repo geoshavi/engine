@@ -42,6 +42,12 @@ RESPONSE_INSTRUCTION = (
     "category must be exactly one of CORRECTNESS, SECURITY, or CODE-QUALITY — use the "
     "closest match, never invent a more specific label. "
     "Return {\"defects\": [], \"verdict\": \"OK\"} if you find nothing to flag."
+    " Before assigning CRITICAL or HIGH, name in the fix field the concrete input or "
+    "condition that makes the code as supplied misbehave: what it produces there, and "
+    "why that result is wrong or unsafe. A finding you cannot trigger that way -- because "
+    "you would have written the code differently, or because of a lower-level "
+    "representation the language already handles on the code's behalf -- is at most "
+    "MEDIUM. Where the trigger is real, give the finding the severity it deserves."
 )
 
 
