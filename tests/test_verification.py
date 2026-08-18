@@ -1,13 +1,15 @@
 import json
+import sys
 from decimal import Decimal
 from pathlib import Path
 
 from engine.providers.base import GenerationResult, Message
 from engine.runtime.budget import BudgetController
 from engine.runtime.gateway import LLMGateway
-from engine.state.models import VerificationResult
+from engine.state import db
+from engine.state.models import EvalCaseResult, VerificationResult
 from engine.verification import pipeline, verdict
-from engine.verification.automated import automated_defects, run_automated_gates
+from engine.verification.automated import _run, automated_defects, run_automated_gates
 from engine.verification.judge import _extract_json_objects, _parse_critic, run_judge_gates
 from engine.verification.schema import enforce_critic_schema
 
@@ -474,3 +476,97 @@ def test_build_retry_feedback_includes_defect_fix_text() -> None:
 
 def test_build_retry_feedback_empty_when_no_defects() -> None:
     assert pipeline.build_retry_feedback({"defects": [], "verdict": "OK"}) == ""
+
+
+# --- DF-1: mypy empty-output / ambiguous "ok" sentinel and lost returncode ---
+#
+# `_run` used to derive `detail = (stdout + stderr).strip() or "ok"`, so a
+# subprocess that exited non-zero without writing a single byte was recorded
+# as `passed = 0, detail = "ok"` -- a sentinel that reads as success on a
+# failed gate -- and `result.returncode` was discarded, leaving no way to
+# attribute the failure to a cause. These tests drive `_run` with real
+# subprocesses (no mocks, no network) so every branch is exercised as the
+# gate actually runs it.
+
+
+def _python(script: str) -> list[str]:
+    return [sys.executable, "-c", script]
+
+
+def test_run_reports_normal_output_verbatim_on_success(tmp_path: Path) -> None:
+    passed, detail = _run(_python("print('Success: no issues found in 1 source file')"), tmp_path)
+
+    assert passed is True
+    assert detail == "Success: no issues found in 1 source file"
+
+
+def test_run_reports_normal_output_verbatim_on_failure(tmp_path: Path) -> None:
+    passed, detail = _run(_python("print('x.py:4: error: bad type'); raise SystemExit(1)"), tmp_path)
+
+    assert passed is False
+    assert detail == "x.py:4: error: bad type"
+
+
+def test_run_never_reports_ok_for_a_failed_gate_that_wrote_no_output(tmp_path: Path) -> None:
+    """The DF-1 defect itself: exit 2 with empty stdout/stderr used to be
+    recorded as detail == "ok" on a failed gate."""
+    passed, detail = _run(_python("raise SystemExit(2)"), tmp_path)
+
+    assert passed is False
+    assert detail != "ok"
+    assert detail == "(no output, exit 2)"
+
+
+def test_run_preserves_the_exit_code_for_each_distinct_silent_failure(tmp_path: Path) -> None:
+    """The exit status is the one value that distinguishes a crash, a kill and
+    a mypy internal exit 2 from one another, so distinct codes must produce
+    distinct details rather than one shared sentinel."""
+    _, detail_two = _run(_python("raise SystemExit(2)"), tmp_path)
+    _, detail_three = _run(_python("raise SystemExit(3)"), tmp_path)
+
+    assert "2" in detail_two
+    assert "3" in detail_three
+    assert detail_two != detail_three
+
+
+def test_run_reports_empty_output_explicitly_even_when_the_gate_passed(tmp_path: Path) -> None:
+    passed, detail = _run(_python("pass"), tmp_path)
+
+    assert passed is True
+    assert detail != "ok"
+    assert detail == "(no output, exit 0)"
+
+
+def test_silent_failure_detail_reaches_the_defect_fix_text() -> None:
+    """The gate's diagnostic must survive into the defect handed to the judge
+    and the retry feedback, not just into the VerificationResult."""
+    defects = automated_defects([VerificationResult("mypy", False, "(no output, exit 2)")])
+
+    assert defects[0]["fix"] == "(no output, exit 2)"
+
+
+def test_silent_failure_detail_round_trips_through_the_gate_record(tmp_path: Path) -> None:
+    """eval_case_automated_gates has no returncode column; the exit status is
+    persisted inside `detail`, so it must survive a write/read cycle intact."""
+    with db.connect(tmp_path / "state.db") as conn:
+        case_result_id = db.record_eval_case_result(
+            conn,
+            EvalCaseResult(
+                eval_run_id=1,
+                eval_case_id="quality-04-clean",
+                task_id="t",
+                expected_verdict="OK",
+                actual_verdict="UNVERIFIED",
+                expected_defect_category=None,
+                detected_defect_categories=[],
+                latency_ms=0,
+                cost=Decimal(0),
+                passed=False,
+            ),
+        )
+        db.record_eval_case_automated_gates(
+            conn, case_result_id, [VerificationResult("mypy", False, "(no output, exit 2)")]
+        )
+        stored = db.get_eval_case_automated_gates(conn, case_result_id)
+
+    assert stored == [VerificationResult("mypy", False, "(no output, exit 2)")]

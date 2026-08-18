@@ -17,7 +17,16 @@ def _run(cmd: list[str], cwd: Path) -> tuple[bool, str]:
     except subprocess.TimeoutExpired:
         return False, f"timed out after {TIMEOUT_SECONDS}s"
     passed = result.returncode == 0
-    detail = (result.stdout + result.stderr).strip() or "ok"
+    # Never collapse an empty result to a bare sentinel: a gate that exits
+    # non-zero without writing a byte is a process-level failure, and the
+    # old `or "ok"` fallback recorded it as a string that reads as success.
+    # eval_case_automated_gates has no returncode column, so the exit status
+    # is carried in `detail` -- the one value that separates a crash, an OS
+    # kill and a tool's own internal exit from each other. Reached only when
+    # there is no output to preserve, so every real message is unaffected.
+    detail = (
+        (result.stdout + result.stderr).strip() or f"(no output, exit {result.returncode})"
+    )
     return passed, detail
 
 
