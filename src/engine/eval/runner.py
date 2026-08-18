@@ -21,12 +21,10 @@ counts toward total_cost -- see _aggregate().
 import shutil
 import sqlite3
 import subprocess
-import sys
 from decimal import Decimal
 from pathlib import Path
 
 from engine.config import Config
-from engine.eval import witness_log
 from engine.eval.dataset import (
     BENCHMARK_NAME,
     BENCHMARK_VERSION,
@@ -339,14 +337,6 @@ def run_benchmark(
         db.finish_eval_run(conn, eval_run_id, **_aggregate(cases, results))
         db.finish_run(conn, run_id, "passed", len(results))
         conn.commit()
-
-        # Passive diagnostics, after every commit and outside the verdict path:
-        # nothing below can change a result, and a failure here must never cost
-        # a completed run (see eval/witness_log.py).
-        try:
-            witness_log.write_witness_log(config.db_path, eval_run_id, results)
-        except Exception as exc:  # noqa: BLE001 -- diagnostics must not abort a paid run
-            print(f"WARNING: witness log failed: {type(exc).__name__}: {exc}", file=sys.stderr)
 
         eval_run = db.get_eval_run(conn, eval_run_id)
         assert eval_run is not None

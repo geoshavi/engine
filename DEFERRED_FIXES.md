@@ -17,6 +17,7 @@ separate, explicitly approved step. Implementing an entry early ends the arm.
 | --- | --- | --- |
 | DF-1 | **IMPLEMENTED / CLOSED** | Phase 8A |
 | DF-2 | **NOT_APPLICABLE_TO_THIS_REPOSITORY / PROVENANCE_RESOLVED** | Phase 8A |
+| DF-3 | **DEFERRED -- NOT APPLIED** | -- |
 
 Neither resolution reclassifies a historical run and neither changes Benchmark v2 dataset
 semantics. See `PHASE8A_INFRASTRUCTURE_CLEANUP.md`.
@@ -282,3 +283,65 @@ finding is a provenance result, established by the read-only searches tabulated 
 facts and are not re-adjudicated here.
 
 **Benchmark v2 dataset semantics changed: NO.** No file under `src/` was modified for DF-2.
+
+---
+
+## DF-3 -- a failing judge lens discards the critics already collected
+
+**Status:** **DEFERRED -- NOT APPLIED.** Classified in Phase 8F by read-only
+inspection. No code was changed.
+**Location:** `src/engine/verification/judge.py`, the `for lens_name, lens_system in
+LENSES.items()` loop in `run_judge_gates`.
+**Classification:** **LATENT_NON_TRIGGERING BUG.**
+
+### Behaviour
+
+If `gateway.generate()` raises for any lens -- budget exceeded, network error,
+provider error -- the exception propagates straight out of `run_judge_gates`, and
+every critic already parsed from earlier lenses in that loop is discarded with it.
+The caller never sees them. `run_case` catches the exception and records an error
+row, so the case is excluded from `correct_verdicts` by `_aggregate`.
+
+The behaviour is deliberate and was documented at the time, in a scope note that
+is still in the source. It is recorded here as a work-queue entry, not as a newly
+discovered defect.
+
+### Measured incidence: zero
+
+| | |
+| --- | --- |
+| Lens calls recorded in `.engine/state.db` | **4,680**, every one `call_status = ok` |
+| Runs with error rows | run 1 only (40 rows, a separate documented issue) |
+| Occurrences across the six stored Benchmark v2 safe-baseline observations | **0** error rows, **0** non-`ok` lens calls |
+
+The path has never executed.
+
+### Why it is deferred rather than fixed
+
+Phase 8F's rule is that a mechanical repair may be applied only if it changes no
+rubric, severity or prompt semantics. This repair does not meet that bar, and
+`judge.py`'s own scope note says why: per-lens fault isolation would "change what
+`gate()` sees when a lens fails, which is a verdict-semantics decision, not an
+observability one."
+
+Concretely, the two options are not equivalent in safety:
+
+| Option | Consequence when a lens fails |
+| --- | --- |
+| **Current** -- raise, discard partial critics | the case errors; no verdict is produced from an incomplete review |
+| **Repair** -- return partial critics plus a per-lens error marker | `gate()` decides on 2 of 3 lenses, so an incomplete review could return `OK` |
+
+The current behaviour is the **fail-closed** direction. A repair that lets a
+partial review produce a passing verdict would weaken exactly the property this
+project treats as most important, and it sits on the measured path
+(`verification/judge.py`), so it would require a fresh benchmark arm to validate.
+
+### If it is ever taken up
+
+It must be its own pre-registered phase, not a cleanup commit: state whether a
+partial review may produce `OK` at all (the recommendation is that it may not),
+add a per-lens error marker that `gate()` treats as fail-closed, and validate with
+deterministic tests that a mid-loop failure yields `UNVERIFIED` rather than a
+verdict computed from surviving lenses.
+
+**Benchmark v2 dataset semantics changed: NO.** No file was modified for DF-3.
