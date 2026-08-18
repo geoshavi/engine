@@ -3,11 +3,6 @@
 
 # engine
 
-<!-- Header/architecture image placeholder. Drop the diagram at
-     docs/assets/architecture-overview.png and replace this comment with:
-     ![Architecture overview](docs/assets/architecture-overview.png)
-     No image file exists in the repository yet, so none is referenced. -->
-
 AI agent orchestration engine: an orchestrator analyzes a task, builds a
 validated execution plan, dispatches specialized sub-agents under enforced
 token/spend limits, then runs their output through a multi-layer verification
