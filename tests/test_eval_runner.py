@@ -751,3 +751,127 @@ def test_eval_case_schema_failures_persist_with_correct_fk(tmp_path: Path) -> No
     # Empty raw_response persists as "" -- not skipped, no NOT NULL failure.
     assert stored[0].raw_response == ""
     assert other_stored == []
+
+
+# ------------------------------------------- lone-surrogate persistence guard
+
+
+def _seed_case_result(conn, eval_case_id: str = "x") -> int:
+    run_id = db.create_run(conn, "eval", "anthropic", "m")
+    eval_run_id = db.create_eval_run(conn, "sha", "bench", "v1", "v1")
+    return db.record_eval_case_result(
+        conn,
+        EvalCaseResult(
+            eval_run_id=eval_run_id,
+            eval_case_id=eval_case_id,
+            task_id=f"eval-{run_id}-{eval_case_id}",
+            expected_verdict="OK",
+            actual_verdict="OK",
+            expected_defect_category=None,
+            detected_defect_categories=[],
+            latency_ms=0,
+            cost=Decimal(0),
+            passed=True,
+        ),
+    )
+
+
+def test_defect_text_with_an_unpaired_surrogate_is_persisted_not_crashed(tmp_path: Path) -> None:
+    """Observed in production (Phase 8D.1 validation run, edge_case-03-clean):
+    a judge quoting an emoji emitted "\\ud83d" unpaired. json.loads accepts a
+    lone surrogate, but sqlite3 must encode to UTF-8 and raises
+    UnicodeEncodeError -- which propagated out of run_benchmark and killed the
+    run at case 36 of 40, losing 35 already-computed case results.
+
+    Model-supplied text is untrusted input to the persistence layer. A
+    malformed character in it must degrade that one string, never abort a run.
+    """
+    # Built at runtime: a lone surrogate cannot survive a source literal.
+    lone_surrogate = "truncating '" + chr(0xD83D) + "' splits the pair"
+    with db.connect(tmp_path / "state.db") as conn:
+        eval_case_result_id = _seed_case_result(conn)
+
+        db.record_eval_case_defects(
+            conn,
+            eval_case_result_id,
+            [
+                {
+                    "lens": "correctness",
+                    "id": "C1",
+                    "category": "CORRECTNESS",
+                    "severity": "HIGH",
+                    "location": lone_surrogate,
+                    "fix": lone_surrogate,
+                }
+            ],
+        )
+        conn.commit()
+
+        stored = db.get_eval_case_defects(conn, eval_case_result_id)
+
+    assert len(stored) == 1
+    # The row survives and stays diagnostic: surrounding text intact, the
+    # offending code point escaped rather than dropped or replaced wholesale.
+    assert stored[0]["fix"].startswith("truncating '")
+    assert stored[0]["fix"].endswith("' splits the pair")
+    assert "\\ud83d" in stored[0]["fix"]
+    assert stored[0]["location"] == stored[0]["fix"]
+    assert stored[0]["severity"] == "HIGH"  # severity is untouched by sanitizing
+
+
+def test_schema_failure_raw_response_with_an_unpaired_surrogate_is_persisted(tmp_path: Path) -> None:
+    """The same hazard on the diagnostics path: raw_response is the model's
+    unparsed output, so it is the single most likely place a malformed code
+    point lands. A schema failure must never become a run failure.
+    """
+    with db.connect(tmp_path / "state.db") as conn:
+        eval_case_result_id = _seed_case_result(conn)
+
+        db.record_eval_case_schema_failures(
+            conn,
+            eval_case_result_id,
+            [
+                EvalCaseSchemaFailure(
+                    lens="correctness",
+                    error_detail="response did not contain a JSON object",
+                    raw_response='{"fix": "' + chr(0xD83D) + ' truncated mid-pair',
+                )
+            ],
+        )
+        conn.commit()
+
+        stored = db.get_eval_case_schema_failures(conn, eval_case_result_id)
+
+    assert len(stored) == 1
+    assert stored[0].lens == "correctness"
+    assert "truncated mid-pair" in stored[0].raw_response
+
+
+def test_well_formed_text_including_real_emoji_round_trips_unchanged(tmp_path: Path) -> None:
+    """Counterexample: sanitizing must touch ONLY unpaired surrogates. A
+    properly-encoded astral character is valid UTF-8 and must survive byte for
+    byte, or the guard has become lossy for legitimate defect text.
+    """
+    intact = "truncating '\N{WAVING HAND SIGN}\u0301 caf\u00e9' corrupts it"
+    with db.connect(tmp_path / "state.db") as conn:
+        eval_case_result_id = _seed_case_result(conn)
+
+        db.record_eval_case_defects(
+            conn,
+            eval_case_result_id,
+            [
+                {
+                    "lens": "correctness",
+                    "id": "C1",
+                    "category": "CORRECTNESS",
+                    "severity": "HIGH",
+                    "location": "solution.py:2",
+                    "fix": intact,
+                }
+            ],
+        )
+        conn.commit()
+
+        stored = db.get_eval_case_defects(conn, eval_case_result_id)
+
+    assert stored[0]["fix"] == intact

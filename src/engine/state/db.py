@@ -224,11 +224,11 @@ def record_defects(
             (
                 run_id,
                 attempt_number,
-                d.get("id", ""),
-                d.get("category", ""),
-                d.get("severity", ""),
-                d.get("location", ""),
-                d.get("fix", ""),
+                _sqlite_safe(d.get("id", "")),
+                _sqlite_safe(d.get("category", "")),
+                _sqlite_safe(d.get("severity", "")),
+                _sqlite_safe(d.get("location", "")),
+                _sqlite_safe(d.get("fix", "")),
             )
             for d in defects
         ],
@@ -480,6 +480,25 @@ def get_eval_case_results(conn: sqlite3.Connection, eval_run_id: int) -> list[Ev
     ]
 
 
+def _sqlite_safe(text: str) -> str:
+    """Model-supplied text can carry an unpaired UTF-16 surrogate.
+
+    ``json.loads`` accepts one -- a model escaping an emoji as a surrogate
+    pair and running out of tokens mid-pair produces exactly this -- but
+    sqlite3 must encode its parameters to UTF-8 and raises
+    UnicodeEncodeError instead. Observed in production: one such defect
+    string aborted a 40-case benchmark at case 36, discarding 35
+    already-computed case results. Judge output is untrusted input to this
+    layer, so a malformed character in it must cost that one string, never a
+    run.
+
+    Escapes only the code points that cannot be encoded and leaves every
+    valid character -- astral planes included -- byte for byte, so the stored
+    diagnostic stays readable and lossless for everything well formed.
+    """
+    return text.encode("utf-8", "backslashreplace").decode("utf-8")
+
+
 def record_eval_case_defects(
     conn: sqlite3.Connection, eval_case_result_id: int, defects: list[dict]
 ) -> None:
@@ -496,11 +515,11 @@ def record_eval_case_defects(
             (
                 eval_case_result_id,
                 d.get("lens") or "automated",
-                d.get("id", ""),
-                d.get("category", ""),
-                d.get("severity", ""),
-                d.get("location", ""),
-                d.get("fix", ""),
+                _sqlite_safe(d.get("id", "")),
+                _sqlite_safe(d.get("category", "")),
+                _sqlite_safe(d.get("severity", "")),
+                _sqlite_safe(d.get("location", "")),
+                _sqlite_safe(d.get("fix", "")),
             )
             for d in defects
         ],
@@ -601,7 +620,12 @@ def record_eval_case_schema_failures(
         "(eval_case_result_id, lens, error_detail, raw_response) "
         "VALUES (?, ?, ?, ?)",
         [
-            (eval_case_result_id, f.lens, f.error_detail or "", f.raw_response or "")
+            (
+                eval_case_result_id,
+                f.lens,
+                _sqlite_safe(f.error_detail or ""),
+                _sqlite_safe(f.raw_response or ""),
+            )
             for f in failures
         ],
     )
