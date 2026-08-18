@@ -5,7 +5,7 @@ from collections.abc import Callable
 from engine.llm_types import Message
 from engine.runtime.budget import BudgetController
 from engine.runtime.gateway import LLMGateway
-from engine.verification.schema import derive_verdict, enforce_critic_schema
+from engine.verification.schema import enforce_critic_schema
 
 LENSES = {
     "correctness": (
@@ -35,23 +35,9 @@ LENSES = {
 RESPONSE_INSTRUCTION = (
     "\n\nRespond with ONLY a JSON object, no prose before or after, no markdown fences:\n"
     '{"defects": [{"id": "C1", "category": "CORRECTNESS|SECURITY|CODE-QUALITY", '
-    '"location": "path:line or description", "fix": "what to change", '
-    '"severity": "CRITICAL|HIGH|MEDIUM|LOW"}], '
+    '"severity": "CRITICAL|HIGH|MEDIUM|LOW", '
+    '"location": "path:line or description", "fix": "what to change"}], '
     '"verdict": "OK|FAIL"}\n'
-    # Key order is load-bearing, not cosmetic. Generation is left-to-right, so a
-    # key emitted before "fix" cannot be conditioned on the analysis written in
-    # "fix". With "severity" emitted first, findings were observed committing to
-    # CRITICAL/HIGH and then retracting themselves inside "fix" -- "no defect
-    # here", "already done correctly", "while blocked by the current checks" --
-    # and the retraction had nowhere to go, so gate() failed closed on a finding
-    # the model had itself withdrawn. Emitting "severity" last lets the
-    # conclusion govern the score instead of trailing it. This changes WHEN
-    # severity is chosen, never what a chosen severity does: CRITICAL/HIGH still
-    # blocks, unconditionally.
-    "Fill these keys in exactly the order shown. Put your analysis and the concrete change "
-    "in \"fix\", then choose \"severity\" last so it reflects the analysis you just wrote: if "
-    "what you wrote in \"fix\" concludes the supplied code already handles the case, "
-    "\"severity\" is not CRITICAL or HIGH. "
     "verdict must be 'FAIL' iff at least one defect has severity CRITICAL or HIGH, else 'OK'. "
     "category must be exactly one of CORRECTNESS, SECURITY, or CODE-QUALITY — use the "
     "closest match, never invent a more specific label. "
@@ -112,14 +98,6 @@ def _parse_critic(response_text: str) -> tuple[dict, list[str]]:
     errors = enforce_critic_schema(parsed)
     if errors:
         return {}, errors
-    # Severities are authoritative; the model's "verdict" string is a duplicate
-    # of what they already say. Normalize it so no consumer can ever see the two
-    # disagree. Safe in both directions: a stale "FAIL" over softened findings
-    # becomes OK (the finding set genuinely holds nothing blocking), and an "OK"
-    # over a CRITICAL/HIGH finding becomes FAIL -- the string cannot rescue a
-    # blocker, and unlike the old schema rejection the blocking defect is now
-    # retained and blocks on its own merit in verdict.merge()/gate().
-    parsed["verdict"] = derive_verdict(parsed.get("defects"))
     return parsed, []
 
 
